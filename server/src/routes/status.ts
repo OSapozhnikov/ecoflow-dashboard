@@ -11,6 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { mqttService } from '../services/mqtt';
 import { ecoflowService } from '../services/ecoflow';
+import { restStatusCache } from '../services/restStatusCache';
 import { apiRequestDuration, apiRequestTotal, deviceStatusUpdatesTotal } from '../utils/metrics';
 
 const router = Router();
@@ -87,29 +88,39 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
       return;
     }
 
-    // Fallback to REST API if MQTT data not available
+    // Fallback to REST API if MQTT data not available.
+    // TTL + in-flight fan-in reuse recent successful quota/all for the same SN
+    // so multiple DeviceCards do not each hammer Ecoflow when MQTT is down.
     try {
-      const restResponse = await ecoflowService.getDeviceStatus(deviceId);
-      
+      const { response: restResponse, cacheHit } = await restStatusCache.getOrFetch(
+        deviceId,
+        () => ecoflowService.getDeviceStatus(deviceId)
+      );
+
       // Subscribe to MQTT for future updates (if MQTT is enabled and connected)
       if (mqttService.isMQTTConnected()) {
         mqttService.subscribeToDevice(deviceId);
       }
-      
+
       // Record metrics
       const duration = (Date.now() - start) / 1000;
       const statusCode = res.statusCode.toString();
       apiRequestDuration.observe({ endpoint, status_code: statusCode }, duration);
       apiRequestTotal.inc({ endpoint, status_code: statusCode });
-      deviceStatusUpdatesTotal.inc({ device_id: deviceId, source: 'rest' });
-      
+      deviceStatusUpdatesTotal.inc({
+        device_id: deviceId,
+        source: cacheHit ? 'rest-cache' : 'rest',
+      });
+
       res.json({
         ...restResponse,
         source: 'rest',
-        timestamp: Date.now(),
+        timestamp: cacheHit
+          ? (restResponse.data?.timestamp ?? Date.now())
+          : Date.now(),
       });
     } catch (restError) {
-      const err = restError as Error;
+      const err = restError as Error & { code?: string; name?: string };
 
       // Record error metrics — honest failure, no invented SOC
       const duration = (Date.now() - start) / 1000;
@@ -117,10 +128,14 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
       apiRequestDuration.observe({ endpoint, status_code: statusCode }, duration);
       apiRequestTotal.inc({ endpoint, status_code: statusCode });
 
+      // Prefer typed EcoflowAPIError message (e.g. clarified "signature is wrong")
       res.status(502).json({
         error: {
           message: err.message || 'Failed to fetch device status',
           code: 'STATUS_FETCH_ERROR',
+          ...(err.name === 'EcoflowAPIError' && err.code
+            ? { ecoflowCode: err.code }
+            : {}),
         },
       });
     }

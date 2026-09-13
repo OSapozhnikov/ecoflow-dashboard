@@ -42,6 +42,11 @@ export const EcoflowDeviceStatusSchema = z.object({
   dischargeRate: z.number().min(0).optional(),
   status: z.enum(['charging', 'discharging', 'standby']),
   timestamp: z.number(),
+  isPlug: z.boolean().optional(),
+  switchSta: z.boolean().optional(),
+  plugWatts: z.number().min(0).optional(),
+  volt: z.number().optional(),
+  temp: z.number().optional(),
 }).passthrough(); // Allow additional fields
 
 /**

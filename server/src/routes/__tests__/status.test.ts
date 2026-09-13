@@ -8,6 +8,7 @@ import express from 'express';
 import statusRouter from '../status';
 import { mqttService } from '../../services/mqtt';
 import { ecoflowService } from '../../services/ecoflow';
+import { restStatusCache } from '../../services/restStatusCache';
 
 // Mock services
 vi.mock('../../services/mqtt', () => ({
@@ -56,7 +57,8 @@ describe('Status Routes', () => {
     app.use(express.json());
     app.use('/api/devices', statusRouter);
     vi.clearAllMocks();
-    
+    restStatusCache.clear();
+
     vi.mocked(mqttService.isMQTTConnected).mockReturnValue(false);
     vi.mocked(mqttService.getConnectionStatus).mockReturnValue({
       connected: false,
@@ -67,6 +69,7 @@ describe('Status Routes', () => {
   });
 
   afterEach(() => {
+    restStatusCache.clear();
     vi.restoreAllMocks();
   });
 
@@ -95,6 +98,7 @@ describe('Status Routes', () => {
       expect(response.body.deviceId).toBe('ABC123');
       expect(response.body.data.batteryLevel).toBe(85);
       expect(response.body.source).toBe('mqtt');
+      expect(ecoflowService.getDeviceStatus).not.toHaveBeenCalled();
     });
 
     it('should fallback to REST API when MQTT data not available', async () => {
@@ -123,6 +127,80 @@ describe('Status Routes', () => {
       expect(response.body.source).toBe('rest');
     });
 
+    it('should reuse REST result within TTL without a second Ecoflow call', async () => {
+      vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
+
+      const mockRestStatus = {
+        deviceId: 'ABC123',
+        data: {
+          deviceId: 'ABC123',
+          batteryLevel: 60,
+          chargeRate: 0,
+          dischargeRate: 0,
+          status: 'standby' as const,
+          timestamp: Date.now(),
+        },
+      };
+
+      vi.mocked(ecoflowService.getDeviceStatus).mockResolvedValue(mockRestStatus);
+
+      await request(app).get('/api/devices/ABC123/status').expect(200);
+      const second = await request(app).get('/api/devices/ABC123/status').expect(200);
+
+      expect(ecoflowService.getDeviceStatus).toHaveBeenCalledTimes(1);
+      expect(second.body.data.batteryLevel).toBe(60);
+      expect(second.body.source).toBe('rest');
+    });
+
+    it('should fan-in concurrent REST fallbacks for the same SN', async () => {
+      vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
+
+      let resolveRest!: (value: {
+        deviceId: string;
+        data: {
+          deviceId: string;
+          batteryLevel: number;
+          status: 'standby';
+          timestamp: number;
+        };
+      }) => void;
+
+      vi.mocked(ecoflowService.getDeviceStatus).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRest = resolve;
+          })
+      );
+
+      // Promise.all subscribes to both SuperTest thenables so requests actually start
+      const resultsPromise = Promise.all([
+        request(app).get('/api/devices/ABC123/status'),
+        request(app).get('/api/devices/ABC123/status'),
+      ]);
+
+      await vi.waitFor(() => {
+        expect(ecoflowService.getDeviceStatus).toHaveBeenCalled();
+        expect(typeof resolveRest).toBe('function');
+      });
+
+      resolveRest({
+        deviceId: 'ABC123',
+        data: {
+          deviceId: 'ABC123',
+          batteryLevel: 42,
+          status: 'standby',
+          timestamp: Date.now(),
+        },
+      });
+
+      const [r1, r2] = await resultsPromise;
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(ecoflowService.getDeviceStatus).toHaveBeenCalledTimes(1);
+      expect(r1.body.data.batteryLevel).toBe(42);
+      expect(r2.body.data.batteryLevel).toBe(42);
+    });
+
     it('should handle empty device ID', async () => {
       // Express route parameter will be empty string for this path
       // The route checks if deviceId is falsy, so empty string should trigger 400
@@ -131,6 +209,17 @@ describe('Status Routes', () => {
       // Since Express routes don't easily handle empty params, we'll skip this edge case test
       // or test it by checking the route handler logic directly
       // For now, we'll test that a valid deviceId works and invalid ones are handled
+      vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
+      vi.mocked(ecoflowService.getDeviceStatus).mockResolvedValue({
+        deviceId: 'ABC123',
+        data: {
+          deviceId: 'ABC123',
+          batteryLevel: 10,
+          status: 'standby' as const,
+          timestamp: Date.now(),
+        },
+      });
+
       const response = await request(app)
         .get('/api/devices/ABC123/status')
         .expect(200);
@@ -154,6 +243,54 @@ describe('Status Routes', () => {
       });
       expect(response.body.data).toBeUndefined();
       expect(response.body.source).toBeUndefined();
+      expect(restStatusCache.size()).toBe(0);
+    });
+
+    it('should surface clarified EcoflowAPIError message on 502 STATUS_FETCH_ERROR', async () => {
+      const { EcoflowAPIError } = await import('../../errors/EcoflowError');
+      vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
+
+      const clarified =
+        'Ecoflow rejected quota/all for SN P351ZEH4PGCC0498 with "signature is wrong". ' +
+        'This often means the SN is unsupported, offline, or not entitled on this account/region ' +
+        '(not a global HMAC failure). Compare logs with a working SN (e.g. Taurus D3M1…). ' +
+        'Vendor code: 13007.';
+
+      vi.mocked(ecoflowService.getDeviceStatus).mockRejectedValue(
+        new EcoflowAPIError(clarified, '13007')
+      );
+
+      const response = await request(app)
+        .get('/api/devices/P351ZEH4PGCC0498/status')
+        .expect(502);
+
+      expect(response.body.error.code).toBe('STATUS_FETCH_ERROR');
+      expect(response.body.error.ecoflowCode).toBe('13007');
+      expect(response.body.error.message).toContain('not a global HMAC failure');
+      expect(response.body.error.message).toContain('P351ZEH4PGCC0498');
+      expect(response.body.data).toBeUndefined();
+      expect(restStatusCache.size()).toBe(0);
+    });
+
+    it('should not serve cache after a failed REST call', async () => {
+      vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
+      vi.mocked(ecoflowService.getDeviceStatus)
+        .mockRejectedValueOnce(new Error('Ecoflow API error: signature is wrong'))
+        .mockResolvedValueOnce({
+          deviceId: 'ABC123',
+          data: {
+            deviceId: 'ABC123',
+            batteryLevel: 33,
+            status: 'standby' as const,
+            timestamp: Date.now(),
+          },
+        });
+
+      await request(app).get('/api/devices/ABC123/status').expect(502);
+      const ok = await request(app).get('/api/devices/ABC123/status').expect(200);
+
+      expect(ecoflowService.getDeviceStatus).toHaveBeenCalledTimes(2);
+      expect(ok.body.data.batteryLevel).toBe(33);
     });
 
     it('should subscribe to MQTT when REST fallback is used', async () => {
@@ -215,4 +352,3 @@ describe('Status Routes', () => {
     });
   });
 });
-

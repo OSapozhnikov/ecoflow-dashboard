@@ -4,8 +4,10 @@
 
 import { memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { deviceFamilyLabel, isSmartPlugFamily, resolveDeviceFamily } from '@ecoflow/shared';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { BatteryIndicator } from './BatteryIndicator';
+import { formatDeviceStatusError } from '../utils/formatDeviceStatusError';
 import type { Device } from '../types/ecoflow';
 
 interface DeviceCardProps {
@@ -32,12 +34,40 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
     return typeof type === 'string' ? type : '';
   }, [device]);
 
+  const productName = useMemo((): string => {
+    const d = device as Device & Record<string, unknown>;
+    const name = d.productName;
+    return typeof name === 'string' ? name : '';
+  }, [device]);
+
   const online = useMemo(() => {
     const onlineValue = (device as Device).online ?? (device as Record<string, unknown>).online;
     return typeof onlineValue === 'number' ? onlineValue === 1 : Boolean(onlineValue);
   }, [device]);
 
+  const family = useMemo(
+    () =>
+      resolveDeviceFamily({
+        sn: deviceId,
+        productName: productName || deviceType,
+        deviceType,
+      }),
+    [deviceId, productName, deviceType]
+  );
+
+  /** API product/type, else SN-family fallback (e.g. P351 → Delta 3 Plus). */
+  const modelLabel = useMemo((): string => {
+    if (deviceType) return deviceType;
+    if (productName) return productName;
+    return deviceFamilyLabel(family) ?? '';
+  }, [deviceType, productName, family]);
+
   const { data: statusData, isLoading, isError, error } = useDeviceStatus(deviceId, true);
+
+  const isPlug = useMemo(() => {
+    if (isSmartPlugFamily(family)) return true;
+    return Boolean(statusData?.data?.isPlug);
+  }, [family, statusData]);
 
   const statusOk = useMemo(() => {
     if (isError || !statusData?.data) return false;
@@ -70,6 +100,27 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
     return null;
   }, [statusData, statusOk]);
 
+  const plugPowerLabel = useMemo(() => {
+    if (!statusOk || !statusData?.data) return null;
+    const { plugWatts, switchSta } = statusData.data;
+    if (typeof plugWatts === 'number') {
+      return { watts: plugWatts, switchSta };
+    }
+    return null;
+  }, [statusData, statusOk]);
+
+  const statusErrorMessage = useMemo(() => {
+    const raw =
+      error?.message || (isPlug ? 'Power unavailable' : 'Status unavailable');
+    return formatDeviceStatusError(raw);
+  }, [error, isPlug]);
+
+  /** Avoid repeating Smart Plug when the model line already says it */
+  const showPlugKindLabel = useMemo(() => {
+    if (!isPlug) return false;
+    return !/smart\s*plug/i.test(modelLabel);
+  }, [isPlug, modelLabel]);
+
   return (
     <Link
       to={`/device/${deviceId}`}
@@ -83,9 +134,9 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 font-mono">
             {String(deviceId)}
           </p>
-          {deviceType && (
+          {modelLabel && (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              {String(deviceType)}
+              {modelLabel}
             </p>
           )}
 
@@ -94,11 +145,43 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
               <p className="text-sm text-gray-500 dark:text-gray-400">Loading status…</p>
             )}
             {(isError || statusData?.source === 'error') && (
-              <p className="text-sm text-red-600 dark:text-red-400" role="status">
-                {error?.message || 'Status unavailable'}
-              </p>
+              <div className="space-y-1">
+                {showPlugKindLabel && (
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Smart Plug</p>
+                )}
+                <p className="text-sm text-red-600 dark:text-red-400" role="status">
+                  {statusErrorMessage}
+                </p>
+              </div>
             )}
-            {statusOk && statusData?.data && (
+            {!statusOk && !isLoading && !isError && statusData?.source !== 'error' && isPlug && (
+              <div className="space-y-1">
+                {showPlugKindLabel && (
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Smart Plug</p>
+                )}
+                <p className="text-sm text-gray-500 dark:text-gray-400">Power unavailable</p>
+              </div>
+            )}
+            {statusOk && statusData?.data && isPlug && (
+              <div className="space-y-2">
+                {showPlugKindLabel && (
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Smart Plug</p>
+                )}
+                {plugPowerLabel ? (
+                  <>
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      Switch: {plugPowerLabel.switchSta ? 'On' : 'Off'}
+                    </p>
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
+                      Power: {plugPowerLabel.watts} W
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Power unavailable</p>
+                )}
+              </div>
+            )}
+            {statusOk && statusData?.data && !isPlug && (
               <div className="space-y-2">
                 <BatteryIndicator level={statusData.data.batteryLevel} size="sm" />
                 {netWatts && (

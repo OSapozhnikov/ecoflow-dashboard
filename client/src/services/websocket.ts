@@ -21,6 +21,11 @@ export interface DeviceStatusUpdate {
     dischargeRate?: number;
     status: 'charging' | 'discharging' | 'standby';
     timestamp: number;
+    isPlug?: boolean;
+    switchSta?: boolean;
+    plugWatts?: number;
+    volt?: number;
+    temp?: number;
   };
   timestamp: number;
   source: 'mqtt' | 'rest';

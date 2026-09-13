@@ -1,20 +1,35 @@
 /**
  * Shared Ecoflow quota → device status mapper.
  * Explicit Delta 3 / Delta Pro keys; /10 only for documented 0.1 W fields.
+ * Smart Plug: 2_1.switchSta / 2_1.watts (0.1 W) / volt / temp (or nested param without prefix).
  */
 
 export type MappedDeviceStatus = 'charging' | 'discharging' | 'standby';
+
+/** Normalized Smart Plug telemetry (watts already converted from 0.1 W). */
+export interface MappedPlugTelemetry {
+  switchSta: boolean;
+  watts: number;
+  volt?: number;
+  temp?: number;
+}
 
 export interface MappedQuota {
   batteryLevel: number;
   chargeRate: number;
   dischargeRate: number;
   status: MappedDeviceStatus;
+  /** Present when quota looks like a Smart Plug heartbeat */
+  plug?: MappedPlugTelemetry;
   /** Which source keys won (for debugging / tests) */
   matched: {
     soc?: string;
     charge?: string;
     discharge?: string;
+    switchSta?: string;
+    plugWatts?: string;
+    volt?: string;
+    temp?: string;
   };
 }
 
@@ -26,10 +41,12 @@ export interface WattFieldSpec {
 }
 
 /**
- * SOC keys — Delta Pro (`bmsMaster.soc`), Delta 3 / Power Ocean (`soc`, `bpSoc`), aliases.
+ * SOC keys — Delta 3 (`cmsBattSoc`), Delta Pro (`bmsMaster.soc`), aliases.
  * Order = priority.
  */
 export const SOC_KEYS: readonly string[] = [
+  'cmsBattSoc',
+  'cms_batt_soc',
   'bmsMaster.soc',
   'soc',
   'bpSoc',
@@ -46,10 +63,11 @@ export const SOC_KEYS: readonly string[] = [
 
 /**
  * Charge / input power fields.
- * Ecoflow Open API docs: `bmsMaster.inputWatts` / bare `inputWatts` are 0.1 W.
- * Other aliases are treated as whole watts.
+ * Delta 3 `powInSumW` is whole W. Pro `bmsMaster.inputWatts` / bare `inputWatts` are 0.1 W.
  */
 export const INPUT_WATT_FIELDS: readonly WattFieldSpec[] = [
+  { key: 'powInSumW', isTenthWatt: false },
+  { key: 'pow_in_sum_w', isTenthWatt: false },
   { key: 'bmsMaster.inputWatts', isTenthWatt: true },
   { key: 'inputWatts', isTenthWatt: true },
   { key: 'pd.wattsInSum', isTenthWatt: false },
@@ -67,9 +85,11 @@ export const INPUT_WATT_FIELDS: readonly WattFieldSpec[] = [
 
 /**
  * Discharge / output power fields.
- * Ecoflow Open API docs: `bmsMaster.outputWatts` / bare `outputWatts` are 0.1 W.
+ * Delta 3 `powOutSumW` is whole W. Pro `bmsMaster.outputWatts` / bare `outputWatts` are 0.1 W.
  */
 export const OUTPUT_WATT_FIELDS: readonly WattFieldSpec[] = [
+  { key: 'powOutSumW', isTenthWatt: false },
+  { key: 'pow_out_sum_w', isTenthWatt: false },
   { key: 'bmsMaster.outputWatts', isTenthWatt: true },
   { key: 'outputWatts', isTenthWatt: true },
   { key: 'pd.wattsOutSum', isTenthWatt: false },
@@ -86,6 +106,27 @@ export const OUTPUT_WATT_FIELDS: readonly WattFieldSpec[] = [
   { key: 'powerACSYS', isTenthWatt: false },
 ] as const;
 
+/** Delta 3 charge/discharge state when both watt fields are 0: 0 idle, 1 discharging, 2 charging */
+export const CHG_DSG_STATE_KEYS: readonly string[] = [
+  'cmsChgDsgState',
+  'cms_chg_dsg_state',
+] as const;
+
+/**
+ * Smart Plug relay + telemetry keys.
+ * REST uses `2_1.*`; MQTT heartbeat often nests bare names under `param`.
+ */
+export const PLUG_SWITCH_KEYS: readonly string[] = ['2_1.switchSta', 'switchSta'] as const;
+
+/** Plug power — documented as 0.1 W units */
+export const PLUG_WATT_FIELDS: readonly WattFieldSpec[] = [
+  { key: '2_1.watts', isTenthWatt: true },
+  { key: 'watts', isTenthWatt: true },
+] as const;
+
+export const PLUG_VOLT_KEYS: readonly string[] = ['2_1.volt', 'volt'] as const;
+export const PLUG_TEMP_KEYS: readonly string[] = ['2_1.temp', 'temp'] as const;
+
 export interface MapQuotaOptions {
   /**
    * MQTT `consWatt`: positive = charge, negative = discharge (already in W).
@@ -95,6 +136,7 @@ export interface MapQuotaOptions {
   /**
    * MQTT `watts` / similar output power already in W (not 0.1 W).
    * Used as discharge fallback when no OUTPUT field matched and consWatt is not discharging.
+   * Ignored when the payload is detected as a Smart Plug (plug watts use /10).
    */
   watts?: number;
 }
@@ -192,8 +234,161 @@ function clampSoc(n: number): number {
   return Math.max(0, Math.min(100, n));
 }
 
+function toSwitchSta(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value !== 0;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true' || lower === '1' || lower === 'on') return true;
+    if (lower === 'false' || lower === '0' || lower === 'off') return false;
+    const n = parseFloat(value);
+    if (!Number.isNaN(n) && Number.isFinite(n)) {
+      return n !== 0;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a non-numeric field (e.g. switchSta as bool/string) by exact, dotted, or nested path.
+ */
+export function getFieldValue(
+  data: Record<string, unknown>,
+  key: string,
+  deep = true
+): unknown {
+  if (key in data) {
+    return data[key];
+  }
+
+  if (key.includes('.')) {
+    const parts = key.split('.');
+    let current: unknown = data;
+    for (const part of parts) {
+      if (typeof current === 'object' && current !== null && part in (current as object)) {
+        current = (current as Record<string, unknown>)[part];
+      } else {
+        current = undefined;
+        break;
+      }
+    }
+    if (current !== undefined) {
+      return current;
+    }
+
+    const leaf = parts[parts.length - 1];
+    for (const [quotaKey, value] of Object.entries(data)) {
+      if (quotaKey === key || quotaKey.endsWith(`.${leaf}`) || quotaKey.endsWith(`.${key}`)) {
+        return value;
+      }
+    }
+  }
+
+  if (deep) {
+    for (const value of Object.values(data)) {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        const found = getFieldValue(value as Record<string, unknown>, key, true);
+        if (found !== undefined) {
+          return found;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function findFirstValue(
+  sources: Record<string, unknown>[],
+  key: string
+): unknown {
+  for (const source of sources) {
+    const value = getFieldValue(source, key, true);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Detect Smart Plug quota shape (REST `2_1.*` or MQTT bare switchSta / 2_1.watts).
+ */
+export function detectPlugQuota(sources: Record<string, unknown>[]): boolean {
+  for (const key of PLUG_SWITCH_KEYS) {
+    if (findFirstValue(sources, key) !== undefined) {
+      return true;
+    }
+  }
+  // Prefixed plug watts only — bare `watts` alone is too ambiguous (stations use it too)
+  if (findFirst(sources, '2_1.watts') !== undefined) {
+    return true;
+  }
+  return false;
+}
+
+function mapPlugTelemetry(
+  sources: Record<string, unknown>[],
+  matched: MappedQuota['matched']
+): MappedPlugTelemetry {
+  let switchSta = false;
+  for (const key of PLUG_SWITCH_KEYS) {
+    const raw = findFirstValue(sources, key);
+    const parsed = toSwitchSta(raw);
+    if (parsed !== undefined) {
+      switchSta = parsed;
+      matched.switchSta = key;
+      break;
+    }
+  }
+
+  let watts = 0;
+  for (const field of PLUG_WATT_FIELDS) {
+    // Prefer prefixed key; only use bare `watts` after plug shape is confirmed by caller
+    const raw = findFirst(sources, field.key);
+    if (raw !== undefined) {
+      watts = Math.max(0, field.isTenthWatt ? raw / 10 : raw);
+      matched.plugWatts = field.key;
+      break;
+    }
+  }
+  watts = Math.max(0, round1(watts));
+
+  let volt: number | undefined;
+  for (const key of PLUG_VOLT_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      volt = raw;
+      matched.volt = key;
+      break;
+    }
+  }
+
+  let temp: number | undefined;
+  for (const key of PLUG_TEMP_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      temp = raw;
+      matched.temp = key;
+      break;
+    }
+  }
+
+  return {
+    switchSta,
+    watts,
+    ...(volt !== undefined ? { volt } : {}),
+    ...(temp !== undefined ? { temp } : {}),
+  };
+}
+
 /**
  * Map raw quota / MQTT payload fields into normalized watts and SOC.
+ * Smart Plug payloads also populate `plug` (switch + W/V/temp).
  */
 export function mapQuotaData(
   data: Record<string, unknown> | Record<string, unknown>[],
@@ -201,6 +396,22 @@ export function mapQuotaData(
 ): MappedQuota {
   const sources = Array.isArray(data) ? data.filter(Boolean) : [data];
   const matched: MappedQuota['matched'] = {};
+
+  const isPlug = detectPlugQuota(sources);
+  if (isPlug) {
+    const plug = mapPlugTelemetry(sources, matched);
+    // Plug has no battery — keep battery fields at zero; status from relay/load
+    const status: MappedDeviceStatus =
+      plug.switchSta && plug.watts > 0 ? 'discharging' : 'standby';
+    return {
+      batteryLevel: 0,
+      chargeRate: 0,
+      dischargeRate: 0,
+      status,
+      plug,
+      matched,
+    };
+  }
 
   let batteryLevel = 0;
   for (const key of SOC_KEYS) {
@@ -262,6 +473,20 @@ export function mapQuotaData(
     status = 'charging';
   } else if (dischargeRate > 0) {
     status = 'discharging';
+  } else {
+    // Delta 3: cmsChgDsgState when both W are 0 (0 idle, 1 discharging, 2 charging)
+    for (const key of CHG_DSG_STATE_KEYS) {
+      const raw = findFirst(sources, key);
+      if (raw === undefined) {
+        continue;
+      }
+      if (raw === 2) {
+        status = 'charging';
+      } else if (raw === 1) {
+        status = 'discharging';
+      }
+      break;
+    }
   }
 
   return {
@@ -270,5 +495,42 @@ export function mapQuotaData(
     dischargeRate,
     status,
     matched,
+  };
+}
+
+/**
+ * Flatten mapped quota into status fields used by MQTT cache / REST responses.
+ * Plug payloads set `isPlug` + switch/power and leave battery at 0.
+ */
+export function toDeviceStatusFields(mapped: MappedQuota): {
+  batteryLevel: number;
+  chargeRate: number;
+  dischargeRate: number;
+  status: MappedDeviceStatus;
+  isPlug?: boolean;
+  switchSta?: boolean;
+  plugWatts?: number;
+  volt?: number;
+  temp?: number;
+} {
+  if (mapped.plug) {
+    return {
+      batteryLevel: 0,
+      chargeRate: 0,
+      dischargeRate: 0,
+      status: mapped.status,
+      isPlug: true,
+      switchSta: mapped.plug.switchSta,
+      plugWatts: mapped.plug.watts,
+      ...(mapped.plug.volt !== undefined ? { volt: mapped.plug.volt } : {}),
+      ...(mapped.plug.temp !== undefined ? { temp: mapped.plug.temp } : {}),
+    };
+  }
+
+  return {
+    batteryLevel: mapped.batteryLevel,
+    chargeRate: mapped.chargeRate,
+    dischargeRate: mapped.dischargeRate,
+    status: mapped.status,
   };
 }

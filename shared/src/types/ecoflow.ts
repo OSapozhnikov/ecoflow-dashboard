@@ -33,11 +33,21 @@ export interface BaseDevice {
  */
 export interface BaseDeviceStatus {
   deviceId: string;
-  batteryLevel: number; // 0-100
-  chargeRate?: number; // Watts
-  dischargeRate?: number; // Watts
+  batteryLevel: number; // 0-100 (unused / 0 for Smart Plug)
+  chargeRate?: number; // Watts (power stations)
+  dischargeRate?: number; // Watts (power stations)
   status: DeviceStatus;
   timestamp: number;
+  /** True when payload was mapped as Smart Plug telemetry */
+  isPlug?: boolean;
+  /** Smart Plug relay on/off */
+  switchSta?: boolean;
+  /** Smart Plug power in watts (already converted from 0.1 W) */
+  plugWatts?: number;
+  /** Smart Plug voltage (V) */
+  volt?: number;
+  /** Smart Plug temperature */
+  temp?: number;
   [key: string]: unknown; // For additional fields from API
 }
 

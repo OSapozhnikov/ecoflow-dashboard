@@ -306,7 +306,64 @@ describe('EcoflowService', () => {
         status: 200,
       });
 
-      await expect(ecoflowService.getDeviceStatus('INVALID')).rejects.toThrow();
+      await expect(ecoflowService.getDeviceStatus('INVALID')).rejects.toThrow(EcoflowAPIError);
+    });
+
+    it('should clarify misleading signature-is-wrong and log canonical signing string', async () => {
+      const { logger } = await import('../../utils/logger');
+      const tauSn = 'P351ZEH4PGCC0498';
+
+      mockRequest.mockResolvedValue({
+        data: {
+          code: '13007',
+          message: 'signature is wrong',
+        },
+        status: 200,
+      });
+
+      await expect(ecoflowService.getDeviceStatus(tauSn)).rejects.toMatchObject({
+        name: 'EcoflowAPIError',
+        code: '13007',
+        message: expect.stringContaining('not a global HMAC failure'),
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Ecoflow quota/all rejected',
+        expect.objectContaining({
+          sn: tauSn,
+          apiCode: '13007',
+          message: 'signature is wrong',
+          canonicalSigningString: expect.stringMatching(
+            /accessKey=.*&nonce=.*&sn=P351ZEH4PGCC0498&timestamp=/
+          ),
+          apiBaseUrl: 'https://api.ecoflow.com',
+          endpoint: '/iot-open/sign/device/quota/all',
+        })
+      );
+
+      // Canonical string must never include the secret key
+      const warnCall = vi.mocked(logger.warn).mock.calls.find(
+        (call) => call[0] === 'Ecoflow quota/all rejected'
+      );
+      const logged = JSON.stringify(warnCall?.[1] ?? {});
+      expect(logged).not.toContain('test-secret-key');
+      expect(logged).not.toMatch(/secretKey/i);
+    });
+
+    it('should keep plain Ecoflow API error message for non-signature rejects', async () => {
+      mockRequest.mockResolvedValue({
+        data: {
+          code: '400',
+          message: 'Device offline',
+        },
+        status: 200,
+      });
+
+      await expect(ecoflowService.getDeviceStatus('D3M1ZE1A9H990313')).rejects.toMatchObject({
+        name: 'EcoflowAPIError',
+        message: 'Ecoflow API error: Device offline',
+        code: '400',
+      });
     });
 
     it('should handle network errors', async () => {

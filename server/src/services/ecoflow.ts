@@ -6,7 +6,7 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import crypto from 'crypto';
-import { mapQuotaData } from '@ecoflow/shared';
+import { mapQuotaData, toDeviceStatusFields } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import {
   EcoflowDeviceListResponse,
@@ -27,10 +27,23 @@ import {
 import { logger } from '../utils/logger';
 import { API_CONFIG } from '../constants';
 
+/** Last request signing context for ops debug (never includes secretKey). */
+export interface EcoflowSigningDebugContext {
+  canonicalSigningString: string;
+  requestParams: Record<string, string>;
+  nonce: string;
+  timestamp: string;
+  accessKey: string;
+  endpoint?: string;
+  method?: string;
+}
+
 export class EcoflowService {
   private client: AxiosInstance;
   private readonly config = getConfig();
   private lastSuccessAt: number | null = null;
+  /** Most recent signing string + public params (for quota/all reject debug). */
+  private lastSigningDebug: EcoflowSigningDebugContext | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -44,6 +57,11 @@ export class EcoflowService {
   /** Timestamp of last successful Ecoflow API response (ms), or null */
   getLastSuccessAt(): number | null {
     return this.lastSuccessAt;
+  }
+
+  /** Last HMAC canonical string / public signing params (no secret). */
+  getLastSigningDebug(): EcoflowSigningDebugContext | null {
+    return this.lastSigningDebug;
   }
 
   /**
@@ -88,9 +106,38 @@ export class EcoflowService {
   }
 
   /**
+   * Build canonical signing string (sorted key=value&...).
+   * Same algorithm as before — extracted so reject paths can log it without the secret.
+   */
+  private buildCanonicalSigningString(
+    params: Record<string, string | number>,
+    accessKey: string,
+    nonce: string,
+    timestamp: string
+  ): { canonicalString: string; signingParams: Record<string, string> } {
+    const signingParams: Record<string, string> = {};
+
+    Object.keys(params).forEach((key) => {
+      signingParams[key] = String(params[key]);
+    });
+
+    signingParams.accessKey = accessKey;
+    signingParams.nonce = nonce;
+    signingParams.timestamp = timestamp;
+
+    const sortedKeys = Object.keys(signingParams).sort();
+    const canonicalString = sortedKeys
+      .map((key) => `${key}=${signingParams[key]}`)
+      .join('&');
+
+    return { canonicalString, signingParams };
+  }
+
+  /**
    * Generate HMAC-SHA256 signature
    * Matches the working Postman script approach
    * For GET requests with query params, values should be used as-is (raw) from URL
+   * HMAC algorithm intentionally unchanged (A3: log-only unless a proven signing bug).
    */
   private generateSignature(
     params: Record<string, string | number>,
@@ -99,39 +146,36 @@ export class EcoflowService {
     nonce: string,
     timestamp: string
   ): string {
-    // Step 1-2: Parameters are already expanded and decoded (if needed)
-    // Convert all values to strings for consistent signing
-    const signingParams: Record<string, string> = {};
-    
-    // Add request parameters (query params or body params)
+    const { canonicalString, signingParams } = this.buildCanonicalSigningString(
+      params,
+      accessKey,
+      nonce,
+      timestamp
+    );
+
+    const requestParams: Record<string, string> = {};
     Object.keys(params).forEach((key) => {
-      signingParams[key] = String(params[key]);
+      requestParams[key] = String(params[key]);
     });
-    
-    // Step 3: Concatenate accessKey, nonce, timestamp
-    signingParams.accessKey = accessKey;
-    signingParams.nonce = nonce;
-    signingParams.timestamp = timestamp;
 
-    // Step 1: Sort parameters by ASCII value (alphabetically by key)
-    const sortedKeys = Object.keys(signingParams).sort();
-
-    // Build canonical query string: key1=value1&key2=value2&...
-    // According to Step 1: concatenate with = and &
-    const canonicalString = sortedKeys
-      .map((key) => `${key}=${signingParams[key]}`)
-      .join('&');
+    this.lastSigningDebug = {
+      canonicalSigningString: canonicalString,
+      requestParams,
+      nonce,
+      timestamp,
+      accessKey,
+    };
 
     logger.debug('=== Signature Generation (per Ecoflow docs) ===', {
       requestParams: params,
-      sortedKeys,
+      sortedKeys: Object.keys(signingParams).sort(),
       canonicalString,
       signingParams,
       secretKeyLength: secretKey.length,
       secretKeyPreview: secretKey.substring(0, 10) + '...',
     });
 
-    // Step 4: Encrypt with HMAC-SHA256
+    // Step 4: Encrypt with HMAC-SHA256 (unchanged)
     const signBytes = crypto
       .createHmac('sha256', secretKey)
       .update(canonicalString)
@@ -262,6 +306,14 @@ export class EcoflowService {
       nonce,
       timestamp
     );
+
+    if (this.lastSigningDebug) {
+      this.lastSigningDebug = {
+        ...this.lastSigningDebug,
+        endpoint,
+        method,
+      };
+    }
 
     // Prepare headers
     const headers: Record<string, string> = {
@@ -477,11 +529,12 @@ export class EcoflowService {
    * Get device status (quota)
    */
   async getDeviceStatus(deviceSn: string): Promise<EcoflowDeviceStatusResponse> {
+    const endpoint = '/iot-open/sign/device/quota/all';
     // For GET requests, pass params as data object (like in Java example)
     // The authenticatedRequest will extract them for signature and URL
     const response = await this.authenticatedRequest<unknown>(
       'GET',
-      `/iot-open/sign/device/quota/all`,
+      endpoint,
       { sn: deviceSn }, // Pass as data object, not queryParams
       false
     );
@@ -497,22 +550,24 @@ export class EcoflowService {
         data?: unknown;
       };
 
+      if (apiResponse.code && apiResponse.code !== '0') {
+        this.throwQuotaAllApiError(deviceSn, apiResponse.code, apiResponse.message, response);
+      }
+
       if (apiResponse.data && typeof apiResponse.data === 'object') {
         // Parse quota data into device status format
         // Flat keys e.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
         const quotaData = apiResponse.data as Record<string, unknown>;
         const mapped = mapQuotaData(quotaData);
+        const statusFields = toDeviceStatusFields(mapped);
 
         return {
           deviceId: deviceSn,
           data: {
             deviceId: deviceSn,
-            batteryLevel: mapped.batteryLevel,
-            chargeRate: mapped.chargeRate,
-            dischargeRate: mapped.dischargeRate,
-            status: mapped.status,
             timestamp: Date.now(),
             ...quotaData, // Include all other fields
+            ...statusFields, // Normalized fields win over raw 0.1 W watts etc.
           },
         };
       }
@@ -527,16 +582,58 @@ export class EcoflowService {
     if (response && typeof response === 'object' && 'code' in response) {
       const errorResponse = response as { code?: string; message?: string };
       if (errorResponse.code && errorResponse.code !== '0') {
-        logger.warn(`⚠️  Ecoflow API error for ${deviceSn}:`, {
-          code: errorResponse.code,
-          message: errorResponse.message,
-        });
-        throw new Error(`Ecoflow API error: ${errorResponse.message || errorResponse.code}`);
+        this.throwQuotaAllApiError(
+          deviceSn,
+          errorResponse.code,
+          errorResponse.message,
+          response
+        );
       }
     }
 
     logger.warn('Unexpected response structure from Device Status API:', { response });
     throw new Error('Unexpected response structure from Device Status API');
+  }
+
+  /**
+   * Log quota/all reject details (SN, API code, canonical signing string — no secret)
+   * and throw a typed EcoflowAPIError. Misleading "signature is wrong" is clarified
+   * so Tau (P351…) vs Taurus (D3M1…) failures are easier to compare in ops logs.
+   */
+  private throwQuotaAllApiError(
+    deviceSn: string,
+    apiCode: string,
+    vendorMessage: string | undefined,
+    response: unknown,
+    httpStatus?: number
+  ): never {
+    const signing = this.lastSigningDebug;
+    const messageText = vendorMessage || apiCode;
+
+    logger.warn('Ecoflow quota/all rejected', {
+      sn: deviceSn,
+      httpStatus: httpStatus ?? null,
+      apiCode,
+      message: vendorMessage,
+      canonicalSigningString: signing?.canonicalSigningString ?? null,
+      requestParams: signing?.requestParams ?? null,
+      nonce: signing?.nonce ?? null,
+      timestamp: signing?.timestamp ?? null,
+      accessKey: signing?.accessKey ?? null,
+      endpoint: signing?.endpoint ?? '/iot-open/sign/device/quota/all',
+      apiBaseUrl: this.config.ecoflow.apiBaseUrl,
+      // Compare failing Tau P351… with successful Taurus D3M1… using the same fields above.
+    });
+
+    const misleadingSignature = /signature\s+is\s+wrong/i.test(messageText);
+    const message = misleadingSignature
+      ? `Ecoflow rejected quota/all for SN ${deviceSn} with "${messageText}". ` +
+        `This often means the SN is unsupported, offline, or not entitled on this account/region ` +
+        `(not a global HMAC failure). Compare logs with a working SN (e.g. Taurus D3M1…). ` +
+        `Vendor code: ${apiCode}.`
+      : `Ecoflow API error: ${messageText}`;
+
+    throw new EcoflowAPIError(message, String(apiCode), httpStatus, response);
   }
 
   /**

@@ -2,6 +2,8 @@
 
 Web app for real-time battery monitoring of Ecoflow Delta 3 Max Plus and Delta 3 Plus.
 
+**Supported SKUs:** Delta 3 Max Plus and Delta 3 Plus are first-class. Vendor PDF documentation exists for Max / Max Plus only; Delta 3 Plus uses the same heartbeat/quota field family (`cmsBattSoc`, `powInSumW` / `powOutSumW`, etc.) until a live dump shows otherwise.
+
 ## Stack
 
 - **Backend:** Node.js 22 LTS, Express 5, TypeScript, Zod 4, Winston, MQTT, WebSocket

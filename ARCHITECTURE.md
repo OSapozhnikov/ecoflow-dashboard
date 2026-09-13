@@ -2,6 +2,10 @@
 
 Real-time battery monitoring for Ecoflow Delta 3 Max Plus and Delta 3 Plus.
 
+**Supported SKUs:** Delta 3 Max Plus and Delta 3 Plus are supported. Vendor PDF coverage exists for Max / Max Plus only; Plus shares the same heartbeat/quota family as Max / Max Plus (`cmsBattSoc`, `powInSumW` / `powOutSumW`, `cmsChgDsgState`) until a live quota dump proves otherwise.
+
+Planning baseline (device docs vs code gaps, roadmap): [PROJECT_ASSESSMENT.md](./PROJECT_ASSESSMENT.md).
+
 ## Stack
 
 | Layer | Technology |
@@ -77,7 +81,7 @@ Single workspace package imported by server and client:
 
 - Types: device / status shapes
 - Constants: `REFETCH_INTERVALS`, API / MQTT / WebSocket defaults
-- `mapQuotaData`: Delta 3 / related quota field mapping; **conditional `/10`** only for documented 0.1 W watt fields (`isTenthWatt`)
+- `mapQuotaData`: Delta 3 / related quota field mapping (Max Plus, Plus same-family keys; Pro legacy `/10` watts); **conditional `/10`** only for documented 0.1 W watt fields (`isTenthWatt`)
 
 MQTT certificate response types stay **server-only**.
 

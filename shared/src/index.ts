@@ -5,4 +5,5 @@
 export * from './types/ecoflow';
 export * from './constants';
 export * from './quotaMapper';
+export * from './deviceFamily';
 

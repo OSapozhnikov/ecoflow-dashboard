@@ -5,7 +5,7 @@
 
 import mqtt, { MqttClient, IClientOptions } from 'mqtt';
 import { EventEmitter } from 'events';
-import { mapQuotaData } from '@ecoflow/shared';
+import { mapQuotaData, toDeviceStatusFields } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import { ecoflowService } from './ecoflow';
 import type { EcoflowDeviceStatus, EcoflowMQTTCertification } from '../types/ecoflow';
@@ -361,6 +361,7 @@ export class MQTTService extends EventEmitter {
       }
       
       const deviceSn = parts[2]; // Third part is device SN
+      const topicKind = parts[parts.length - 1]; // quota | status | get_reply
 
       if (!deviceSn) {
         logger.warn('⚠️  Could not extract device SN from topic:', { topic });
@@ -368,9 +369,15 @@ export class MQTTService extends EventEmitter {
         return;
       }
 
+      // /status carries online/presence only — never overwrite SOC/W with mapper zeros
+      if (topicKind === 'status') {
+        this.handlePresenceMessage(deviceSn, data, topic, start);
+        return;
+      }
 
-      // Parse device status from MQTT message
-      const status = this.parseDeviceStatus(data, deviceSn);
+      // /quota and get_reply: map telemetry into status cache
+      const previous = this.statusCache.get(deviceSn);
+      const status = this.parseDeviceStatus(data, deviceSn, previous?.status);
       
       if (status) {
         const update: DeviceStatusUpdate = {
@@ -410,12 +417,112 @@ export class MQTTService extends EventEmitter {
   }
 
   /**
+   * Handle MQTT /status presence updates without wiping quota-derived SOC/W.
+   * Payload shape: { params|param: { status: 0|1 } }
+   */
+  private handlePresenceMessage(
+    deviceSn: string,
+    data: unknown,
+    topic: string,
+    start: number
+  ): void {
+    const online = this.extractOnlinePresence(data);
+    if (online === undefined) {
+      logger.debug(`⚠️  Could not extract presence from /status for ${deviceSn}`, { data });
+      mqttMessagesTotal.inc({ topic, status: 'parse_failed' });
+      return;
+    }
+
+    const cached = this.statusCache.get(deviceSn);
+    if (!cached) {
+      // No quota yet — do not seed cache with 0% / 0 W
+      logger.debug(`📡 Presence-only update for ${deviceSn} (no quota cache yet)`, { online });
+      const duration = (Date.now() - start) / 1000;
+      mqttMessageProcessingDuration.observe({ topic }, duration);
+      mqttMessagesTotal.inc({ topic, status: 'success' });
+      return;
+    }
+
+    const now = Date.now();
+    const update: DeviceStatusUpdate = {
+      deviceSn,
+      timestamp: now,
+      source: 'mqtt',
+      status: {
+        ...cached.status,
+        online,
+        timestamp: now,
+      },
+    };
+
+    this.statusCache.set(deviceSn, update);
+    this.lastSuccessAt = now;
+    deviceStatusCacheSize.set(this.statusCache.size);
+
+    const duration = (Date.now() - start) / 1000;
+    mqttMessageProcessingDuration.observe({ topic }, duration);
+    mqttMessagesTotal.inc({ topic, status: 'success' });
+    this.emit('status', update);
+  }
+
+  /**
+   * Extract online flag from MQTT /status payload wrappers.
+   */
+  private extractOnlinePresence(data: unknown): boolean | undefined {
+    if (typeof data !== 'object' || data === null) {
+      return undefined;
+    }
+
+    const obj = data as Record<string, unknown>;
+    const wrappers: Record<string, unknown>[] = [obj];
+
+    for (const key of ['params', 'param', 'data'] as const) {
+      const value = obj[key];
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        wrappers.push(value as Record<string, unknown>);
+      }
+    }
+
+    for (const wrapper of wrappers) {
+      if ('status' in wrapper) {
+        const s = wrapper.status;
+        if (typeof s === 'number') {
+          return s === 1;
+        }
+        if (typeof s === 'boolean') {
+          return s;
+        }
+      }
+      if ('online' in wrapper) {
+        const o = wrapper.online;
+        if (typeof o === 'number') {
+          return o === 1;
+        }
+        if (typeof o === 'boolean') {
+          return o;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Parse device status from MQTT message
    * According to official documentation, MQTT messages contain params object
    * Structure: { id, version, operateType, from, params: { ... } }
+   * Also accepts singular `param` wrapper (Smart Plug / some heartbeats).
    * Also handles different message formats from Ecoflow devices
+   *
+   * Delta 3 /quota heartbeats are often partial (e.g. only powInSumW). When SOC
+   * is absent from this message, preserve previous batteryLevel instead of
+   * defaulting to 0% (mapQuotaData unmatched → batteryLevel 0).
    */
-  private parseDeviceStatus(data: unknown, deviceSn: string): EcoflowDeviceStatus | null {
+  private parseDeviceStatus(
+    data: unknown,
+    deviceSn: string,
+    previousStatus?: EcoflowDeviceStatus
+  ): EcoflowDeviceStatus | null {
     try {
       if (typeof data !== 'object' || data === null) {
         return null;
@@ -432,6 +539,9 @@ export class MQTTService extends EventEmitter {
 
       if ('params' in obj && typeof obj.params === 'object' && obj.params !== null) {
         params = obj.params as Record<string, unknown>;
+      } else if ('param' in obj && typeof obj.param === 'object' && obj.param !== null) {
+        // Singular wrapper used by some device heartbeats (e.g. Smart Plug)
+        params = obj.param as Record<string, unknown>;
       }
 
       if (!params && !dataField) {
@@ -460,16 +570,38 @@ export class MQTTService extends EventEmitter {
         consWatt: typeof consWattRaw === 'number' ? consWattRaw : undefined,
         watts: typeof wattsRaw === 'number' ? wattsRaw : undefined,
       });
+      const statusFields = toDeviceStatusFields(mapped);
 
-      logger.debug(`🔍 Parsed values for ${deviceSn}:`, {
-        batteryLevel: mapped.batteryLevel,
-        chargeRate: mapped.chargeRate,
-        dischargeRate: mapped.dischargeRate,
-        status: mapped.status,
-        matched: mapped.matched,
-        hasDataField: !!dataField,
-        hasParams: !!params,
-      });
+      // Partial MQTT quota: watts without SOC → keep last known SOC
+      const preservedSoc =
+        !statusFields.isPlug &&
+        !mapped.matched.soc &&
+        previousStatus &&
+        !previousStatus.isPlug &&
+        typeof previousStatus.batteryLevel === 'number';
+      if (preservedSoc) {
+        statusFields.batteryLevel = previousStatus.batteryLevel;
+      }
+
+      const topKeys = Object.keys(searchData).slice(0, 40);
+      // Dev printf logger drops meta objects — embed payload in message string
+      logger.debug(
+        `🔍 Parsed values for ${deviceSn}: ` +
+          JSON.stringify({
+            batteryLevel: statusFields.batteryLevel,
+            chargeRate: statusFields.chargeRate,
+            dischargeRate: statusFields.dischargeRate,
+            status: statusFields.status,
+            isPlug: statusFields.isPlug,
+            plugWatts: statusFields.plugWatts,
+            switchSta: statusFields.switchSta,
+            matched: mapped.matched,
+            preservedSoc,
+            topKeys,
+            hasDataField: !!dataField,
+            hasParams: !!params,
+          })
+      );
 
       const hasData =
         (dataField && Object.keys(dataField).length > 0) ||
@@ -480,14 +612,12 @@ export class MQTTService extends EventEmitter {
         return null;
       }
 
+      // Spread raw params first; normalized plug/station fields win afterward
       const statusData = {
         deviceId: deviceSn,
-        batteryLevel: mapped.batteryLevel,
-        chargeRate: mapped.chargeRate,
-        dischargeRate: mapped.dischargeRate,
-        status: mapped.status,
         timestamp: Date.now(),
         ...(params || {}),
+        ...statusFields,
       };
 
       const parseResult = safeParseEcoflowDeviceStatus(statusData);
@@ -500,9 +630,10 @@ export class MQTTService extends EventEmitter {
       });
 
       if (
-        mapped.batteryLevel === 0 &&
-        mapped.chargeRate === 0 &&
-        mapped.dischargeRate === 0
+        !statusFields.isPlug &&
+        statusFields.batteryLevel === 0 &&
+        statusFields.chargeRate === 0 &&
+        statusFields.dischargeRate === 0
       ) {
         logger.warn(`⚠️  No battery/charge data found for ${deviceSn}. Full structure:`, {
           data: dataField,

@@ -308,5 +308,147 @@ describe('MQTTService', () => {
       await promise;
     });
   });
+
+  describe('quota vs status cache', () => {
+    type HandleMessageFn = (topic: string, message: Buffer) => void;
+
+    function invokeHandleMessage(topic: string, payload: unknown): void {
+      const handleMessage = (mqttService as unknown as { handleMessage: HandleMessageFn })
+        .handleMessage;
+      handleMessage.call(mqttService, topic, Buffer.from(JSON.stringify(payload)));
+    }
+
+    it('keeps SOC/W after quota then /status presence update', async () => {
+      const sn = 'D3M1ZE1A9H990313';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          cmsBattSoc: 67,
+          powInSumW: 120,
+          powOutSumW: 0,
+        },
+      });
+
+      let cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.batteryLevel).toBe(67);
+      expect(cached!.status.chargeRate).toBe(120);
+      expect(cached!.status.dischargeRate).toBe(0);
+      expect(cached!.status.status).toBe('charging');
+
+      invokeHandleMessage(`/open/${account}/${sn}/status`, {
+        params: { status: 1 },
+      });
+
+      cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.batteryLevel).toBe(67);
+      expect(cached!.status.chargeRate).toBe(120);
+      expect(cached!.status.dischargeRate).toBe(0);
+      expect(cached!.status.status).toBe('charging');
+      expect(cached!.status.online).toBe(true);
+    });
+
+    it('does not seed zero SOC/W from /status alone', async () => {
+      const sn = 'D3M1ONLYSTATUS01';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/status`, {
+        params: { status: 1 },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).toBeNull();
+    });
+
+    it('preserves SOC when later partial quota has only powInSumW (Taurus A1)', async () => {
+      const sn = 'D3M1ZE1A9H990313';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          cmsBattSoc: 67,
+          powInSumW: 100,
+          powOutSumW: 0,
+        },
+      });
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          // Partial heartbeat: watts only — no cmsBattSoc
+          powInSumW: 222,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.batteryLevel).toBe(67);
+      expect(cached!.status.chargeRate).toBe(222);
+      expect(cached!.status.status).toBe('charging');
+    });
+
+    it('allows explicit cmsBattSoc 0 to overwrite previous SOC', async () => {
+      const sn = 'D3M1ZE1A9H990313';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: { cmsBattSoc: 67, powInSumW: 50 },
+      });
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: { cmsBattSoc: 0, powInSumW: 222 },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.batteryLevel).toBe(0);
+      expect(cached!.status.chargeRate).toBe(222);
+    });
+
+    it('accepts singular param wrapper for quota telemetry', async () => {
+      const sn = 'P351ZEH4PGCC0498';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        param: {
+          cmsBattSoc: 55,
+          powInSumW: 0,
+          powOutSumW: 200,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.batteryLevel).toBe(55);
+      expect(cached!.status.dischargeRate).toBe(200);
+      expect(cached!.status.status).toBe('discharging');
+    });
+
+    it('maps Smart Plug MQTT param into plug fields (Bathroom HW52)', async () => {
+      const sn = 'HW52DH596BD4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        param: {
+          switchSta: 1,
+          watts: 1500, // 150.0 W
+          volt: 230,
+          temp: 27,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.switchSta).toBe(true);
+      expect(cached!.status.plugWatts).toBe(150);
+      expect(cached!.status.volt).toBe(230);
+      expect(cached!.status.temp).toBe(27);
+      expect(cached!.status.batteryLevel).toBe(0);
+      expect(cached!.status.chargeRate).toBe(0);
+      expect(cached!.status.dischargeRate).toBe(0);
+    });
+  });
 });
 
