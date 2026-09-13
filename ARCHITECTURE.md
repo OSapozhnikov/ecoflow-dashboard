@@ -10,27 +10,49 @@ Real-time battery monitoring for Ecoflow Delta 3 Max Plus and Delta 3 Plus.
 | Backend | Express **5**, TypeScript, Zod **4**, Winston, Helmet, MQTT, `ws`, prom-client |
 | Frontend | React **19.3**, Vite **8**, Tailwind **4** (`@tailwindcss/vite`), React Router **7**, TanStack Query 5 |
 | Shared | npm workspace `@ecoflow/shared` (types, constants, `mapQuotaData`) |
+| Tests | Vitest (server + client) |
 | Prod edge | `nginx:1.27-alpine` → SPA + reverse proxy |
 
-Install tip: workspace installs often need `npm install --legacy-peer-deps`.
+Install tip: workspace installs often need `npm install --legacy-peer-deps` (Dockerfiles use the same flag).
 
 ## High-level flow
 
-```mermaid
-flowchart LR
-  browser[Browser]
-  nginx[Nginx_80]
-  api[Express_5000]
-  eco[Ecoflow_API_MQTT]
-  browser -->|"/ /api/ /ws /health"| nginx
-  nginx -->|static| spa[SPA]
-  nginx -->|"/api/ /ws /health"| api
-  api -->|HMAC + ACCESS_KEY| eco
-  api -->|cert endpoint then MQTT| eco
-```
+End-to-end runtime path (prod edge vs local/dev proxy):
 
-- Browser uses **same-origin** `/api` and `/ws` by default (Nginx proxies them).
-- `VITE_API_BASE_URL` overrides the API origin when needed (e.g. local Vite → `:5000`).
+```mermaid
+flowchart TD
+  subgraph edge [Edge]
+    browser[Browser_SPA]
+    nginx[Nginx_80]
+    vite[Vite_dev_proxy]
+  end
+
+  subgraph backend [Backend]
+    express[Express_5000]
+    mqttSvc[MQTT_service]
+    wsSvc[WebSocket_service]
+  end
+
+  subgraph ecoflow [Ecoflow]
+    restApi[REST_Open_API]
+    mqttBroker[MQTT_broker]
+  end
+
+  browser -->|"prod: / /api/ /ws /health"| nginx
+  browser -->|"dev: same-origin or VITE_API_BASE_URL"| vite
+  nginx -->|static SPA| browser
+  nginx -->|"/api/ /ws /health"| express
+  vite -->|"proxy /api /ws /health"| express
+
+  express -->|"HMAC REST"| restApi
+  express -->|"cert then subscribe"| mqttBroker
+  mqttBroker -->|quota status| mqttSvc
+  mqttSvc -->|mapQuotaData| wsSvc
+  wsSvc -->|"WS /ws push"| browser
+  browser -->|"REST poll fallback"| express
+```
+- Browser uses **same-origin** `/api` and `/ws` by default (Nginx proxies them in prod; Vite proxies in local/dev when `VITE_API_BASE_URL` is empty).
+- `VITE_API_BASE_URL` overrides the API origin when needed. Dev Compose sets it to `http://localhost:5000` (browser → host-mapped Express) and `VITE_API_BASE_URL_DOCKER=http://server:5000` for the Vite proxy target inside the container.
 - **Not** exposed on port 80: `/metrics`, `/api-docs` (available on Express `:5000` only).
 
 ## Monorepo layout
@@ -47,15 +69,15 @@ ecoflow-dashboard/
 └── README.md
 ```
 
-Dev Dockerfiles build from **repo root** with workspaces. Compose volumes mount under `/app/{client,server,shared}`.
+Dev Dockerfiles build from **repo root** with workspaces (`WORKDIR /app`, packages under `/app/{client,server,shared}`). Compose volumes mount sources under those paths.
 
 ## Shared package (`@ecoflow/shared`)
 
 Single workspace package imported by server and client:
 
 - Types: device / status shapes
-- Constants: API, MQTT, WebSocket defaults
-- `mapQuotaData`: Delta 3 / related quota field mapping; some watt fields converted with `/10` when the source is documented as 0.1 W
+- Constants: `REFETCH_INTERVALS`, API / MQTT / WebSocket defaults
+- `mapQuotaData`: Delta 3 / related quota field mapping; **conditional `/10`** only for documented 0.1 W watt fields (`isTenthWatt`)
 
 MQTT certificate response types stay **server-only**.
 
@@ -71,12 +93,44 @@ Credentials never leave the backend.
 
 ## Real-time data path
 
-Hybrid: **MQTT → WebSocket → REST / HTTP polling fallback**.
+Hybrid: **MQTT → WebSocket → React Query HTTP polling fallback**.
 
 1. When MQTT is enabled, the server calls Ecoflow `GET /iot-open/sign/certification` to obtain broker URL, port, protocol, and `certificateAccount` / `certificatePassword`.
 2. MQTT subscribe topics follow `/open/{certificateAccount}/{sn}/quota|status`.
 3. Parsed quota uses shared `mapQuotaData`; updates are pushed to browsers over `WS /ws`.
 4. Status route prefers MQTT cache; on miss it falls back to REST.
+5. Client React Query polls REST as a safety net (see intervals below).
+
+Status for `GET /api/devices/:deviceId/status`:
+
+```mermaid
+flowchart TD
+  req[Status_request]
+  mqttCache[MQTT_cache]
+  restCall[Ecoflow_REST]
+  okMqtt["200 source mqtt"]
+  okRest["200 source rest"]
+  err502["502 STATUS_FETCH_ERROR"]
+
+  req --> mqttCache
+  mqttCache -->|hit| okMqtt
+  mqttCache -->|miss| restCall
+  restCall -->|ok shape| okRest
+  restCall -->|fail or bad shape| err502
+```
+
+### Client polling & rate limit
+
+Defined in `shared/src/constants` (`REFETCH_INTERVALS`) and `client/src/constants` (`RATE_LIMIT_CONFIG`):
+
+| Constant | Value | Role |
+|----------|-------|------|
+| `DEVICES` | 60 s | Device list refetch |
+| `DEVICE_STATUS` | 30 s | Status poll when WebSocket is unavailable |
+| `DEVICE_STATUS_WS` | 60 s | Light REST check while MQTT/WS pushes live updates |
+| Client rate limit | 10 req / 60 s | Axios client limiter — intervals tuned to stay under this |
+
+Server Express rate limit (separate): 100 req / 15 min in production (`RATE_LIMIT` in shared).
 
 ### Honest status errors
 
@@ -131,11 +185,11 @@ Frontend:
 
 **Production** (`docker-compose.yml`): multi-stage server image + Nginx client; healthchecks on `/health` (server) and SPA root (client). Nginx proxies `/api/`, `/ws`, `/health` to `server:5000`.
 
-**Development** (`docker-compose.dev.yml`): workspace-aware `Dockerfile.dev` builds from repo root; hot reload via volumes under `/app/{client,server,shared}`.
+**Development** (`docker-compose.dev.yml`): workspace-aware `Dockerfile.dev` builds from repo root with `--legacy-peer-deps`; hot reload via volumes under `/app/{client,server,shared}`.
 
 ```bash
-docker-compose -f docker-compose.dev.yml up --build
-docker-compose up -d --build
+docker compose -f docker-compose.dev.yml up --build
+docker compose up -d --build
 ```
 
 ## Out of scope (current pass)

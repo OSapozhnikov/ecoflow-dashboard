@@ -6,7 +6,8 @@ Web app for real-time battery monitoring of Ecoflow Delta 3 Max Plus and Delta 3
 
 - **Backend:** Node.js 22 LTS, Express 5, TypeScript, Zod 4, Winston, MQTT, WebSocket
 - **Frontend:** React 19.3, Vite 8, Tailwind 4 (`@tailwindcss/vite`), React Router 7, TanStack Query 5
-- **Shared:** `@ecoflow/shared` (npm workspaces)
+- **Shared:** `@ecoflow/shared` (npm workspaces) — types, `REFETCH_INTERVALS`, `mapQuotaData`
+- **Tests:** Vitest (server + client)
 - **Deploy:** Docker Compose, Nginx (proxies `/api/`, `/ws`, `/health`)
 
 Workspace installs often need: `npm install --legacy-peer-deps`
@@ -61,17 +62,20 @@ Frontend API base:
 
 - **Default:** same-origin (empty) — use with Vite proxy or Nginx
 - **Override:** `VITE_API_BASE_URL=http://localhost:5000` when the API is on another origin
+- **Dev Docker:** Compose sets `VITE_API_BASE_URL=http://localhost:5000` and `VITE_API_BASE_URL_DOCKER=http://server:5000` (proxy target inside the container)
 
 ### Development
 
 **Docker (recommended):**
 
 ```bash
-docker-compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 - API: http://localhost:5000  
 - UI: http://localhost:3000  
+
+Dev images build from the **repo root** workspace context (`/app/{client,server,shared}`) and use `--legacy-peer-deps`.
 
 **Local (without Docker):**
 
@@ -88,8 +92,8 @@ Vite proxies `/api`, `/ws`, and `/health` to the backend in development.
 ### Production
 
 ```bash
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 - UI + proxied API/WS: http://localhost (port 80)  
@@ -111,6 +115,8 @@ Nginx on `:80` proxies `/api/`, `/ws`, and `/health` to the server. It does **no
 | `GET /metrics` | Prometheus metrics (port 5000) |
 
 Auth to Ecoflow: **HMAC-SHA256 + ACCESS_KEY / SECRET_KEY** (not OAuth2).
+
+Real-time path: MQTT via `/iot-open/sign/certification` → WebSocket `/ws` → React Query polling fallback (`DEVICES` 60s, `DEVICE_STATUS` 30s, `DEVICE_STATUS_WS` 60s). Client Axios limiter: 10 req / 60s.
 
 ## Project layout
 
@@ -149,7 +155,7 @@ Coverage / Docker test profile:
 ./run-tests.sh            # Linux/Mac
 .\run-tests.ps1           # Windows
 # or
-docker-compose -f docker-compose.dev.yml --profile tests up --build tests
+docker compose -f docker-compose.dev.yml --profile tests up --build tests
 ```
 
 MQTT smoke script:
@@ -160,7 +166,7 @@ npm run test-mqtt --workspace=server
 
 ## Docs
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — auth, MQTT cert flow, Nginx proxy, ops, shared package
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — auth, MQTT cert flow, polling intervals, Nginx proxy, ops, shared package
 - Swagger: http://localhost:5000/api-docs (when server is running)
 
 ## License
