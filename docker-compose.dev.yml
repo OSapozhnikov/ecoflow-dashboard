@@ -1,0 +1,187 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    container_name: ecoflow-server-dev
+    ports:
+      - "5000:5000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - ECOFLOW_ACCESS_KEY=${ECOFLOW_ACCESS_KEY}
+      - ECOFLOW_SECRET_KEY=${ECOFLOW_SECRET_KEY}
+      - ECOFLOW_API_BASE_URL=${ECOFLOW_API_BASE_URL:-https://api-e.ecoflow.com}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      # MQTT Configuration (Optional)
+      - ECOFLOW_MQTT_ENABLED=${ECOFLOW_MQTT_ENABLED:-false}
+      - ECOFLOW_MQTT_BROKER_URL=${ECOFLOW_MQTT_BROKER_URL:-mqtt://mqtt.ecoflow.com:1883}
+      - ECOFLOW_MQTT_AUTH_TYPE=${ECOFLOW_MQTT_AUTH_TYPE:-access_key}
+      - ECOFLOW_MQTT_USERNAME=${ECOFLOW_MQTT_USERNAME:-}
+      - ECOFLOW_MQTT_PASSWORD=${ECOFLOW_MQTT_PASSWORD:-}
+      - ECOFLOW_MQTT_EMAIL=${ECOFLOW_MQTT_EMAIL:-}
+      - ECOFLOW_MQTT_CLIENT_ID=${ECOFLOW_MQTT_CLIENT_ID:-}
+      # WebSocket Configuration (Optional)
+      - WEBSOCKET_ENABLED=${WEBSOCKET_ENABLED:-true}
+      - WEBSOCKET_PATH=${WEBSOCKET_PATH:-/ws}
+    volumes:
+      - ./server/src:/app/src:ro
+      - ./server/package.json:/app/package.json:ro
+      - ./shared:/app/shared:ro
+      - ./server/coverage:/app/coverage
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - ecoflow-network
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
+    container_name: ecoflow-client-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:5000
+      - VITE_API_BASE_URL_DOCKER=http://server:5000
+    volumes:
+      - ./client/src:/app/src:ro
+      - ./client/public:/app/public:ro
+      - ./client/index.html:/app/index.html:ro
+      - ./client/vite.config.ts:/app/vite.config.ts:ro
+      - ./shared:/app/shared:ro
+      - /app/node_modules
+      - client-coverage:/app/coverage
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - ecoflow-network
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  # Server tests service
+  server-tests:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    container_name: ecoflow-server-tests
+    environment:
+      - NODE_ENV=test
+      - ECOFLOW_ACCESS_KEY=${ECOFLOW_ACCESS_KEY:-test-access-key}
+      - ECOFLOW_SECRET_KEY=${ECOFLOW_SECRET_KEY:-test-secret-key}
+      - ECOFLOW_API_BASE_URL=${ECOFLOW_API_BASE_URL:-https://api-e.ecoflow.com}
+      - PORT=5000
+    volumes:
+      - ./server/src:/app/src:ro
+      - ./server/package.json:/app/package.json:ro
+      - ./server/vitest.config.ts:/app/vitest.config.ts:ro
+      - ./server/tsconfig.json:/app/tsconfig.json:ro
+      - ./shared:/app/shared:ro
+      - /app/node_modules
+      - server-coverage:/app/coverage
+    command: sh -c "npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true && npm run test:coverage"
+    networks:
+      - ecoflow-network
+    profiles:
+      - tests
+
+  # Client tests service
+  client-tests:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
+    container_name: ecoflow-client-tests
+    environment:
+      - NODE_ENV=test
+      - VITE_API_BASE_URL=http://localhost:5000
+    volumes:
+      - ./client/src:/app/src:ro
+      - ./client/public:/app/public:ro
+      - ./client/index.html:/app/index.html:ro
+      - ./client/vite.config.ts:/app/vite.config.ts:ro
+      - ./client/vitest.config.ts:/app/vitest.config.ts:ro
+      - ./client/tsconfig.json:/app/tsconfig.json:ro
+      - ./shared:/app/shared:ro
+      - /app/node_modules
+      - client-coverage:/app/coverage
+    command: sh -c "npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true && npm run test:coverage"
+    networks:
+      - ecoflow-network
+    profiles:
+      - tests
+
+  # Run all tests service
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    container_name: ecoflow-all-tests
+    environment:
+      - NODE_ENV=test
+      - ECOFLOW_ACCESS_KEY=${ECOFLOW_ACCESS_KEY:-test-access-key}
+      - ECOFLOW_SECRET_KEY=${ECOFLOW_SECRET_KEY:-test-secret-key}
+      - ECOFLOW_API_BASE_URL=${ECOFLOW_API_BASE_URL:-https://api-e.ecoflow.com}
+      - PORT=5000
+    volumes:
+      - ./server:/app/server
+      - ./client:/app/client
+      - ./shared:/app/shared
+      - server-coverage:/app/server/coverage
+      - client-coverage:/app/client/coverage
+    working_dir: /app
+    command: >
+      sh -c "
+        echo '=== Installing dependencies ===' &&
+        cd /app/server && npm install &&
+        cd /app/client && npm install &&
+        echo '' &&
+        echo '=== Installing coverage packages ===' &&
+        cd /app/server && npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true &&
+        cd /app/client && npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true &&
+        echo '' &&
+        echo '=== Running server tests with coverage ===' &&
+        cd /app/server && npm run test:coverage || exit 1 &&
+        echo '' &&
+        echo '=== Running client tests with coverage ===' &&
+        cd /app/client && npm run test:coverage || exit 1 &&
+        echo '' &&
+        echo '=== Copying coverage reports to volumes ===' &&
+        mkdir -p /app/server/coverage /app/client/coverage &&
+        # Copy from tmp directories to volume directories
+        if [ -d /app/server/coverage-tmp ] && [ "$(ls -A /app/server/coverage-tmp)" ]; then
+          cp -r /app/server/coverage-tmp/* /app/server/coverage/ 2>/dev/null || true
+        fi &&
+        if [ -d /app/client/coverage-tmp ] && [ "$(ls -A /app/client/coverage-tmp)" ]; then
+          cp -r /app/client/coverage-tmp/* /app/client/coverage/ 2>/dev/null || true
+        fi &&
+        echo 'Server coverage:' && ls -la /app/server/coverage/ 2>/dev/null | head -5 || echo 'Server coverage directory created' &&
+        echo 'Client coverage:' && ls -la /app/client/coverage/ 2>/dev/null | head -5 || echo 'Client coverage directory created' &&
+        echo '' &&
+        echo '=== All tests completed successfully ===' &&
+        echo 'Coverage reports saved in Docker volumes:' &&
+        echo '  - server-coverage volume' &&
+        echo '  - client-coverage volume' &&
+        echo '' &&
+        echo 'To extract coverage reports, run:' &&
+        echo '  docker cp ecoflow-all-tests:/app/server/coverage ./server/coverage' &&
+        echo '  docker cp ecoflow-all-tests:/app/client/coverage ./client/coverage'
+      "
+    networks:
+      - ecoflow-network
+    profiles:
+      - tests
+
+volumes:
+  server-coverage:
+    driver: local
+  client-coverage:
+    driver: local
+
+networks:
+  ecoflow-network:
+    driver: bridge
+

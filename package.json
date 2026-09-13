@@ -1,0 +1,30 @@
+{
+  "name": "ecoflow-delta-3",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test:docker": "docker-compose -f docker-compose.dev.yml --profile tests up --build tests",
+    "test:coverage": "docker-compose -f docker-compose.dev.yml --profile tests up --build tests",
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,md,yml,yaml}\"",
+    "type-check": "npm run type-check --workspace=server && npm run type-check --workspace=client",
+    "test": "npm run test --workspace=server && npm run test:run --workspace=client",
+    "prepare": "husky"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.52.0",
+    "@typescript-eslint/parser": "^8.52.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.7.4"
+  }
+}

@@ -1,0 +1,19 @@
+FROM node:22-alpine
+WORKDIR /app
+
+# Встановлення залежностей (включаючи dev)
+# Копіюємо package файли (контекст build вже в ./server)
+COPY package*.json ./
+# Використовуємо npm install для dev середовища (більш гнучко для монорепо)
+RUN npm install
+
+# Копіювання коду (буде замонтовано як volume в docker-compose)
+# Контекст build вже в ./server, тому копіюємо поточну директорію
+COPY . ./
+
+# Відкриваємо порт
+EXPOSE 5000
+
+# Запуск з nodemon для hot reload
+CMD ["npm", "run", "dev"]
+
