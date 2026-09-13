@@ -102,11 +102,24 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
 
   const plugPowerLabel = useMemo(() => {
     if (!statusOk || !statusData?.data) return null;
-    const { plugWatts, switchSta } = statusData.data;
-    if (typeof plugWatts === 'number') {
-      return { watts: plugWatts, switchSta };
+    const { plugWatts, switchSta, chargeRate, dischargeRate } = statusData.data;
+    // Prefer plugWatts; fall back to pre-refactor netWatts fields when mapper only
+    // filled charge/discharge (e.g. options.watts → dischargeRate path).
+    const watts =
+      typeof plugWatts === 'number'
+        ? plugWatts
+        : typeof dischargeRate === 'number' && dischargeRate > 0
+          ? dischargeRate
+          : typeof chargeRate === 'number' && chargeRate > 0
+            ? chargeRate
+            : undefined;
+    if (typeof watts !== 'number' && typeof switchSta !== 'boolean') {
+      return null;
     }
-    return null;
+    return {
+      watts,
+      switchSta: typeof switchSta === 'boolean' ? switchSta : undefined,
+    };
   }, [statusData, statusOk]);
 
   const statusErrorMessage = useMemo(() => {
@@ -169,12 +182,16 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
                 )}
                 {plugPowerLabel ? (
                   <>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Switch: {plugPowerLabel.switchSta ? 'On' : 'Off'}
-                    </p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Power: {plugPowerLabel.watts} W
-                    </p>
+                    {typeof plugPowerLabel.switchSta === 'boolean' && (
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        Switch: {plugPowerLabel.switchSta ? 'On' : 'Off'}
+                      </p>
+                    )}
+                    {typeof plugPowerLabel.watts === 'number' && (
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        Power: {plugPowerLabel.watts} W
+                      </p>
+                    )}
                   </>
                 ) : (
                   <p className="text-sm text-gray-500 dark:text-gray-400">Power unavailable</p>

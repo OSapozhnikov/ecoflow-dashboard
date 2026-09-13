@@ -449,6 +449,193 @@ describe('MQTTService', () => {
       expect(cached!.status.chargeRate).toBe(0);
       expect(cached!.status.dischargeRate).toBe(0);
     });
+
+    it('does not wipe Smart Plug watts when task(2_2) quota arrives', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        cmdId: 1,
+        cmdFunc: 2,
+        param: {
+          switchSta: true,
+          watts: 11400, // 1140 W ≈ 1.14 kW in EcoFlow app
+          volt: 230,
+          temp: 35,
+        },
+      });
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        cmdId: 2,
+        cmdFunc: 2,
+        param: {
+          task1: {
+            taskIndex: 0,
+            type: 0,
+            timeRange: { isConfig: false, isEnable: false },
+          },
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.plugWatts).toBe(1140);
+      expect(cached!.status.switchSta).toBe(true);
+    });
+
+    it('does not wipe Smart Plug watts when time/meta-only quota arrives', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        cmdId: 1,
+        cmdFunc: 2,
+        params: {
+          switchSta: true,
+          watts: 20, // 2.0 W
+          volt: 230,
+        },
+      });
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          dstTime: 1760000000,
+          utcTime: 1760000000,
+          timeZone: 3,
+          runTime: 12345,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.plugWatts).toBe(2);
+      expect(cached!.status.switchSta).toBe(true);
+    });
+
+    it('does not seed Smart Plug cache from time/meta-only quota', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          dstTime: 1760000000,
+          utcTime: 1760000000,
+          timeZone: 3,
+          runTime: 12345,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).toBeNull();
+    });
+
+    it('maps HW52 watts-only heartbeat via forcePlug (no switchSta)', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        param: {
+          watts: 2130, // 213.0 W
+          volt: 231,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.plugWatts).toBe(213);
+      // Must not invent Off when switchSta was omitted
+      expect(cached!.status.switchSta).toBeUndefined();
+    });
+
+    it('preserves Bathroom switchSta across watts-only partial quota', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        cmdId: 1,
+        cmdFunc: 2,
+        param: {
+          switchSta: true,
+          watts: 20, // 2.0 W — matches EcoFlow app low load
+          volt: 230,
+          temp: 28,
+        },
+      });
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        cmdId: 1,
+        cmdFunc: 2,
+        param: {
+          watts: 21, // 2.1 W update without switchSta
+          volt: 231,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.switchSta).toBe(true);
+      expect(cached!.status.plugWatts).toBe(2.1);
+      expect(cached!.status.volt).toBe(231);
+      expect(cached!.status.temp).toBe(28); // preserved from first heartbeat
+    });
+
+    it('does not seed HW52 cache from lanState/brightness-only quota', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        param: {
+          lanState: 3,
+          brightness: 1023,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).toBeNull();
+    });
+
+    it('does not seed HW52 cache from parentWifiRssi + time meta', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: {
+          dstTime: 1760000000,
+          utcTime: 1760000000,
+          timeZone: 3,
+          runTime: 12345,
+          parentWifiRssi: -55,
+        },
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).toBeNull();
+    });
+
+    it('maps HW52 options.watts-style raw when watts present after meta skip', async () => {
+      const sn = 'HW52ZDH59G8D4764';
+      const account = 'test-account';
+
+      // Meta-only must not seed
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: { utcTime: 1, parentWifiRssi: -40 },
+      });
+      expect(await mqttService.getDeviceStatus(sn)).toBeNull();
+
+      // Real watts heartbeat restores pre-refactor visible power
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        param: { watts: 1500 }, // 150.0 W
+      });
+
+      const cached = await mqttService.getDeviceStatus(sn);
+      expect(cached).not.toBeNull();
+      expect(cached!.status.isPlug).toBe(true);
+      expect(cached!.status.plugWatts).toBe(150);
+    });
   });
 });
 

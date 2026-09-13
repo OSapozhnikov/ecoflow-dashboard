@@ -256,6 +256,62 @@ describe('mapQuotaData', () => {
     expect(result.status).toBe('standby');
   });
 
+  it('forcePlug maps bare MQTT watts /10 without switchSta (HW52 partial)', () => {
+    // App shows ~1.14 kW → raw 0.1 W units = 11400
+    const result = mapQuotaData({ watts: 11400, volt: 230 }, { forcePlug: true });
+    expect(result.plug).toBeDefined();
+    expect(result.plug!.watts).toBe(1140);
+    expect(result.plug!.volt).toBe(230);
+    // Must not invent Off when switchSta was absent from the payload
+    expect(result.plug!.switchSta).toBeUndefined();
+    expect(result.matched.plugWatts).toBe('watts');
+    expect(result.matched.switchSta).toBeUndefined();
+    expect(result.dischargeRate).toBe(0);
+    expect(toDeviceStatusFields(result).switchSta).toBeUndefined();
+    expect(toDeviceStatusFields(result).plugWatts).toBe(1140);
+  });
+
+  it('forcePlug without plug keys does not invent Off / 0 W', () => {
+    const result = mapQuotaData({ lanState: 3, brightness: 1023 }, { forcePlug: true });
+    expect(result.plug).toBeDefined();
+    expect(result.plug!.switchSta).toBeUndefined();
+    expect(result.plug!.watts).toBeUndefined();
+    expect(toDeviceStatusFields(result)).toMatchObject({ isPlug: true });
+    expect(toDeviceStatusFields(result).switchSta).toBeUndefined();
+    expect(toDeviceStatusFields(result).plugWatts).toBeUndefined();
+  });
+
+  it('forcePlug falls back to options.watts /10 when payload lacks watts key', () => {
+    // Pre-refactor: options.watts → dischargeRate; restore into plugWatts (0.1 W units)
+    const result = mapQuotaData({ volt: 230 }, { forcePlug: true, watts: 2130 });
+    expect(result.plug!.watts).toBe(213);
+    expect(result.matched.plugWatts).toBe('options.watts');
+    expect(toDeviceStatusFields(result).plugWatts).toBe(213);
+  });
+
+  it('forcePlug falls back to consWatt (already W) when plug watts missing', () => {
+    const result = mapQuotaData({ lanState: 1 }, { forcePlug: true, consWatt: -42 });
+    expect(result.plug!.watts).toBe(42);
+    expect(result.matched.plugWatts).toBe('consWatt');
+  });
+
+  it('forcePlug falls back to outputWatts (0.1 W) when plug keys missing', () => {
+    const result = mapQuotaData({ outputWatts: 880 }, { forcePlug: true });
+    expect(result.plug!.watts).toBe(88);
+    expect(result.matched.plugWatts).toBe('outputWatts');
+    expect(toDeviceStatusFields(result).plugWatts).toBe(88);
+  });
+
+  it('maps switchSta 1 as On and watts 20 as 2.0 W (Bathroom low load)', () => {
+    const result = mapQuotaData({
+      '2_1.switchSta': 1,
+      '2_1.watts': 20, // 2.0 W in 0.1 W units
+    });
+    expect(result.plug!.switchSta).toBe(true);
+    expect(result.plug!.watts).toBe(2);
+    expect(result.status).toBe('discharging');
+  });
+
   it('does not treat bare station watts option as plug without switchSta', () => {
     const result = mapQuotaData({ soc: 10 }, { watts: 88 });
     expect(result.plug).toBeUndefined();

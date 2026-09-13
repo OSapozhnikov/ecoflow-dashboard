@@ -289,6 +289,43 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
+  it('falls back to dischargeRate when plugWatts missing (pre-refactor path)', () => {
+    const device = {
+      sn: 'HW52ZDH59G8D4764',
+      deviceName: 'Bathroom',
+      productName: 'Smart Plug',
+      online: 1,
+    };
+
+    vi.mocked(useDeviceStatus).mockReturnValue({
+      data: {
+        deviceId: 'HW52ZDH59G8D4764',
+        data: {
+          deviceId: 'HW52ZDH59G8D4764',
+          batteryLevel: 0,
+          chargeRate: 0,
+          dischargeRate: 88,
+          status: 'discharging',
+          timestamp: Date.now(),
+          isPlug: true,
+        },
+        source: 'mqtt',
+        timestamp: Date.now(),
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      wsConnected: true,
+      usingMQTT: true,
+    } as ReturnType<typeof useDeviceStatus>);
+
+    render(<DeviceCard device={device} />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Power:\s*88\s*W/)).toBeInTheDocument();
+    expect(screen.queryByText('Power unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
   it('shows Smart Plug power unavailable without fake 0% battery', () => {
     const device = {
       sn: 'HW52DH596BD4764',

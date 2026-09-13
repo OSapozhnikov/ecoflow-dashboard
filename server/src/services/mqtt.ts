@@ -5,7 +5,12 @@
 
 import mqtt, { MqttClient, IClientOptions } from 'mqtt';
 import { EventEmitter } from 'events';
-import { mapQuotaData, toDeviceStatusFields } from '@ecoflow/shared';
+import {
+  mapQuotaData,
+  toDeviceStatusFields,
+  resolveDeviceFamily,
+  isSmartPlugFamily,
+} from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import { ecoflowService } from './ecoflow';
 import type { EcoflowDeviceStatus, EcoflowMQTTCertification } from '../types/ecoflow';
@@ -375,6 +380,16 @@ export class MQTTService extends EventEmitter {
         return;
       }
 
+      // Smart Plug also publishes schedule (2_2), time/meta, wifiRssi-only on /quota —
+      // never wipe watts / seed empty plug status with those.
+      if (this.isSmartPlugNonTelemetryQuota(data, deviceSn)) {
+        logger.debug(`⏭️  Skipping Smart Plug non-telemetry quota for ${deviceSn}`);
+        mqttMessagesTotal.inc({ topic, status: 'skipped_nontel' });
+        const duration = (Date.now() - start) / 1000;
+        mqttMessageProcessingDuration.observe({ topic }, duration);
+        return;
+      }
+
       // /quota and get_reply: map telemetry into status cache
       const previous = this.statusCache.get(deviceSn);
       const status = this.parseDeviceStatus(data, deviceSn, previous?.status);
@@ -463,6 +478,151 @@ export class MQTTService extends EventEmitter {
     mqttMessageProcessingDuration.observe({ topic }, duration);
     mqttMessagesTotal.inc({ topic, status: 'success' });
     this.emit('status', update);
+  }
+
+  /**
+   * Smart Plug docs publish heartbeat(2_1) with watts/switchSta, plus non-telemetry
+   * /quota shapes that must not replace the status cache:
+   * - task(2_2) schedules under `param.taskN` / `2_2.*`
+   * - time/meta-only (dstTime, utcTime, timeZone, runTime, …) with no plug keys
+   * - wifi/lan/brightness heartbeats without watts (would seed empty forcePlug status)
+   * - for known HW52 SN: any message lacking plug telemetry keys
+   */
+  private isSmartPlugNonTelemetryQuota(data: unknown, deviceSn?: string): boolean {
+    if (typeof data !== 'object' || data === null) {
+      return false;
+    }
+
+    const obj = data as Record<string, unknown>;
+    const envelopeKeys = new Set([
+      'id',
+      'version',
+      'operateType',
+      'from',
+      'method',
+      'cmdId',
+      'cmdFunc',
+      'params',
+      'param',
+      'data',
+      'code',
+      'message',
+      'topic',
+    ]);
+    const plugKeys = new Set([
+      'switchSta',
+      'watts',
+      '2_1.switchSta',
+      '2_1.watts',
+      'volt',
+      '2_1.volt',
+      'current',
+      '2_1.current',
+      'temp',
+      '2_1.temp',
+      // Pre-refactor / station-shaped aliases sometimes appear on plug MQTT
+      'consWatt',
+      'outputWatts',
+      'outWatts',
+      'outPutWatts',
+      'dischargeRate',
+      'dischargePower',
+    ]);
+    // Docs/smart-plug: runTime & clock fields are not power telemetry
+    const timeMetaKeys = new Set([
+      'dstTime',
+      'utcTime',
+      'timeZone',
+      'timezone',
+      'runTime',
+      'localTime',
+      'sysTime',
+      'parentWifiRssi',
+      'wifiRssi',
+      'rssi',
+      'lanState',
+      'brightness',
+    ]);
+
+    const paramBags: Record<string, unknown>[] = [];
+    for (const key of ['param', 'params', 'data'] as const) {
+      const value = obj[key];
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        paramBags.push(value as Record<string, unknown>);
+      }
+    }
+    // Include top-level non-envelope keys (some devices omit param wrapper)
+    const topLevelParams: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (!envelopeKeys.has(key)) {
+        topLevelParams[key] = value;
+      }
+    }
+    if (Object.keys(topLevelParams).length > 0) {
+      paramBags.push(topLevelParams);
+    }
+    // Always scan the raw object for cmdId / nested detection too
+    const bags: Record<string, unknown>[] = [obj, ...paramBags];
+
+    let hasPlugTelemetry = false;
+    let hasTask = false;
+    const contentKeys = new Set<string>();
+
+    for (const bag of bags) {
+      for (const key of Object.keys(bag)) {
+        if (envelopeKeys.has(key)) {
+          continue;
+        }
+        contentKeys.add(key);
+        if (plugKeys.has(key) || key.startsWith('2_1.')) {
+          hasPlugTelemetry = true;
+        }
+        if (/^task\d+$/i.test(key) || key.startsWith('2_2.') || key === 'task') {
+          hasTask = true;
+        }
+      }
+    }
+
+    // Known Smart Plug SN (HW52…): never seed/overwrite cache without plug power keys.
+    // Live Bathroom logs often show only dstTime/utcTime/parentWifiRssi — those used to
+    // create forcePlug empty status → UI "Power unavailable" while MQTT stayed green.
+    if (
+      deviceSn &&
+      isSmartPlugFamily(resolveDeviceFamily({ sn: deviceSn })) &&
+      !hasPlugTelemetry
+    ) {
+      return true;
+    }
+
+    // Docs: task report uses cmdId 2; heartbeat uses cmdId 1
+    const cmdId = obj.cmdId;
+    if (cmdId === 2 && !hasPlugTelemetry) {
+      return true;
+    }
+
+    if (hasTask && !hasPlugTelemetry) {
+      return true;
+    }
+
+    // Time/meta-only params (no watts/switchSta/…) — skip entirely so we never
+    // seed forcePlug empty status or overwrite a good heartbeat.
+    if (!hasPlugTelemetry && contentKeys.size > 0) {
+      let onlyTimeMeta = true;
+      let hasTimeMeta = false;
+      for (const key of contentKeys) {
+        if (timeMetaKeys.has(key)) {
+          hasTimeMeta = true;
+        } else {
+          onlyTimeMeta = false;
+          break;
+        }
+      }
+      if (onlyTimeMeta && hasTimeMeta) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -566,11 +726,70 @@ export class MQTTService extends EventEmitter {
         (params?.watts as number | undefined) ??
         (obj.watts as number | undefined);
 
+      // HW52… / Smart Plug: force plug mapping so bare MQTT `watts` (0.1 W) is used
+      const forcePlug = isSmartPlugFamily(resolveDeviceFamily({ sn: deviceSn }));
+
       const mapped = mapQuotaData(sources, {
         consWatt: typeof consWattRaw === 'number' ? consWattRaw : undefined,
         watts: typeof wattsRaw === 'number' ? wattsRaw : undefined,
+        forcePlug,
       });
       const statusFields = toDeviceStatusFields(mapped);
+
+      // Non-plug fragment after a plug heartbeat: keep last switch/watts
+      if (
+        !statusFields.isPlug &&
+        previousStatus?.isPlug &&
+        (typeof previousStatus.plugWatts === 'number' ||
+          typeof previousStatus.switchSta === 'boolean')
+      ) {
+        logger.debug(
+          `🔌 Preserving prior Smart Plug telemetry for ${deviceSn} (message lacked plug keys)`
+        );
+        return {
+          ...previousStatus,
+          timestamp: Date.now(),
+        };
+      }
+
+      // Partial plug heartbeats often omit switchSta or watts — merge last known
+      // values instead of inventing Off / 0 W (docs: only present keys are authoritative).
+      let preservedPlugFields = false;
+      if (statusFields.isPlug && previousStatus?.isPlug) {
+        if (
+          typeof statusFields.switchSta !== 'boolean' &&
+          typeof previousStatus.switchSta === 'boolean'
+        ) {
+          statusFields.switchSta = previousStatus.switchSta;
+          preservedPlugFields = true;
+        }
+        if (
+          typeof statusFields.plugWatts !== 'number' &&
+          typeof previousStatus.plugWatts === 'number'
+        ) {
+          statusFields.plugWatts = previousStatus.plugWatts;
+          preservedPlugFields = true;
+        }
+        if (typeof statusFields.volt !== 'number' && typeof previousStatus.volt === 'number') {
+          statusFields.volt = previousStatus.volt;
+          preservedPlugFields = true;
+        }
+        if (typeof statusFields.temp !== 'number' && typeof previousStatus.temp === 'number') {
+          statusFields.temp = previousStatus.temp;
+          preservedPlugFields = true;
+        }
+        if (preservedPlugFields) {
+          statusFields.status =
+            statusFields.switchSta === true &&
+            typeof statusFields.plugWatts === 'number' &&
+            statusFields.plugWatts > 0
+              ? 'discharging'
+              : 'standby';
+          logger.debug(
+            `🔌 Merged prior Smart Plug fields for ${deviceSn} (partial quota)`
+          );
+        }
+      }
 
       // Partial MQTT quota: watts without SOC → keep last known SOC
       const preservedSoc =
@@ -584,24 +803,53 @@ export class MQTTService extends EventEmitter {
       }
 
       const topKeys = Object.keys(searchData).slice(0, 40);
-      // Dev printf logger drops meta objects — embed payload in message string
-      logger.debug(
-        `🔍 Parsed values for ${deviceSn}: ` +
-          JSON.stringify({
-            batteryLevel: statusFields.batteryLevel,
-            chargeRate: statusFields.chargeRate,
-            dischargeRate: statusFields.dischargeRate,
-            status: statusFields.status,
-            isPlug: statusFields.isPlug,
-            plugWatts: statusFields.plugWatts,
-            switchSta: statusFields.switchSta,
-            matched: mapped.matched,
-            preservedSoc,
-            topKeys,
-            hasDataField: !!dataField,
-            hasParams: !!params,
-          })
-      );
+      const parseMeta = {
+        batteryLevel: statusFields.batteryLevel,
+        chargeRate: statusFields.chargeRate,
+        dischargeRate: statusFields.dischargeRate,
+        status: statusFields.status,
+        isPlug: statusFields.isPlug,
+        plugWatts: statusFields.plugWatts,
+        switchSta: statusFields.switchSta,
+        matched: mapped.matched,
+        forcePlug,
+        preservedSoc,
+        preservedPlugFields,
+        topKeys,
+        hasDataField: !!dataField,
+        hasParams: !!params,
+      };
+
+      // Warn when a real/partial plug heartbeat still lacks watts; otherwise debug.
+      // Include FULL params key sample so nested/alias watt fields are visible in logs.
+      if (forcePlug && typeof statusFields.plugWatts !== 'number') {
+        const hasPartialPlug =
+          typeof statusFields.switchSta === 'boolean' ||
+          typeof statusFields.volt === 'number' ||
+          typeof statusFields.temp === 'number' ||
+          Boolean(
+            mapped.matched.switchSta || mapped.matched.volt || mapped.matched.temp
+          );
+        const fullParamsSample = {
+          searchDataKeys: Object.keys(searchData),
+          searchData: searchData,
+          paramsKeys: params ? Object.keys(params) : [],
+          params: params,
+          dataFieldKeys: dataField ? Object.keys(dataField) : [],
+          dataField: dataField,
+        };
+        const line =
+          `🔌 Smart Plug parse missing plugWatts for ${deviceSn}: ` +
+          JSON.stringify({ ...parseMeta, fullParamsSample });
+        if (hasPartialPlug) {
+          logger.warn(line);
+        } else {
+          logger.debug(line);
+        }
+      } else {
+        // Dev printf logger drops meta objects — embed payload in message string
+        logger.debug(`🔍 Parsed values for ${deviceSn}: ` + JSON.stringify(parseMeta));
+      }
 
       const hasData =
         (dataField && Object.keys(dataField).length > 0) ||
@@ -612,11 +860,20 @@ export class MQTTService extends EventEmitter {
         return null;
       }
 
-      // Spread raw params first; normalized plug/station fields win afterward
+      // Spread raw params first; normalized plug/station fields win afterward.
+      // Drop raw `watts` / ambiguous keys so UI never confuses 0.1 W raw with plugWatts.
+      const rawParams = { ...(params || {}) } as Record<string, unknown>;
+      if (statusFields.isPlug) {
+        delete rawParams.watts;
+        // Prefer normalized boolean; remove raw so number 0/1 cannot leak past omit
+        if (typeof statusFields.switchSta === 'boolean') {
+          delete rawParams.switchSta;
+        }
+      }
       const statusData = {
         deviceId: deviceSn,
         timestamp: Date.now(),
-        ...(params || {}),
+        ...rawParams,
         ...statusFields,
       };
 

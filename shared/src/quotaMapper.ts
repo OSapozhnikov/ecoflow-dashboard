@@ -8,8 +8,10 @@ export type MappedDeviceStatus = 'charging' | 'discharging' | 'standby';
 
 /** Normalized Smart Plug telemetry (watts already converted from 0.1 W). */
 export interface MappedPlugTelemetry {
-  switchSta: boolean;
-  watts: number;
+  /** Present only when a switchSta key was in this payload (do not invent false). */
+  switchSta?: boolean;
+  /** Present only when a watts key was in this payload (do not invent 0). */
+  watts?: number;
   volt?: number;
   temp?: number;
 }
@@ -139,6 +141,11 @@ export interface MapQuotaOptions {
    * Ignored when the payload is detected as a Smart Plug (plug watts use /10).
    */
   watts?: number;
+  /**
+   * Force Smart Plug mapping (e.g. SN prefix HW52) even when this message
+   * lacks `switchSta` / `2_1.watts` — still reads bare `watts` as 0.1 W.
+   */
+  forcePlug?: boolean;
 }
 
 function toNumber(value: unknown): number | undefined {
@@ -335,7 +342,8 @@ function mapPlugTelemetry(
   sources: Record<string, unknown>[],
   matched: MappedQuota['matched']
 ): MappedPlugTelemetry {
-  let switchSta = false;
+  // Docs: switchSta 0/false = off, 1/true = on. Omit when absent — never invent Off.
+  let switchSta: boolean | undefined;
   for (const key of PLUG_SWITCH_KEYS) {
     const raw = findFirstValue(sources, key);
     const parsed = toSwitchSta(raw);
@@ -346,17 +354,17 @@ function mapPlugTelemetry(
     }
   }
 
-  let watts = 0;
+  // Docs: 2_1.watts / param.watts in 0.1 W. Omit when absent — never invent 0 W.
+  let watts: number | undefined;
   for (const field of PLUG_WATT_FIELDS) {
     // Prefer prefixed key; only use bare `watts` after plug shape is confirmed by caller
     const raw = findFirst(sources, field.key);
     if (raw !== undefined) {
-      watts = Math.max(0, field.isTenthWatt ? raw / 10 : raw);
+      watts = Math.max(0, round1(field.isTenthWatt ? raw / 10 : raw));
       matched.plugWatts = field.key;
       break;
     }
   }
-  watts = Math.max(0, round1(watts));
 
   let volt: number | undefined;
   for (const key of PLUG_VOLT_KEYS) {
@@ -379,8 +387,8 @@ function mapPlugTelemetry(
   }
 
   return {
-    switchSta,
-    watts,
+    ...(switchSta !== undefined ? { switchSta } : {}),
+    ...(watts !== undefined ? { watts } : {}),
     ...(volt !== undefined ? { volt } : {}),
     ...(temp !== undefined ? { temp } : {}),
   };
@@ -397,18 +405,62 @@ export function mapQuotaData(
   const sources = Array.isArray(data) ? data.filter(Boolean) : [data];
   const matched: MappedQuota['matched'] = {};
 
-  const isPlug = detectPlugQuota(sources);
+  const isPlug = detectPlugQuota(sources) || Boolean(options.forcePlug);
   if (isPlug) {
     const plug = mapPlugTelemetry(sources, matched);
+    let plugWatts = plug.watts;
+
+    // Pre-refactor UI showed MQTT `options.watts` via dischargeRate. Restore that
+    // into plugWatts when PLUG_WATT_FIELDS missed (partial / oddly keyed payloads).
+    if (plugWatts === undefined) {
+      const { consWatt, watts: optsWatts } = options;
+      if (typeof optsWatts === 'number') {
+        // Same unit as PLUG_WATT_FIELDS: Ecoflow plug watts are 0.1 W
+        plugWatts = Math.max(0, round1(optsWatts / 10));
+        matched.plugWatts = 'options.watts';
+      } else if (typeof consWatt === 'number' && consWatt !== 0) {
+        plugWatts = Math.max(0, round1(Math.abs(consWatt)));
+        matched.plugWatts = 'consWatt';
+      } else {
+        for (const field of OUTPUT_WATT_FIELDS) {
+          const raw = findFirst(sources, field.key);
+          if (raw !== undefined) {
+            plugWatts = Math.max(0, round1(field.isTenthWatt ? raw / 10 : raw));
+            matched.plugWatts = field.key;
+            break;
+          }
+        }
+        if (plugWatts === undefined) {
+          for (const field of INPUT_WATT_FIELDS) {
+            const raw = findFirst(sources, field.key);
+            if (raw !== undefined) {
+              plugWatts = Math.max(0, round1(field.isTenthWatt ? raw / 10 : raw));
+              matched.plugWatts = field.key;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    const plugResolved: MappedPlugTelemetry = {
+      ...plug,
+      ...(plugWatts !== undefined ? { watts: plugWatts } : {}),
+    };
+
     // Plug has no battery — keep battery fields at zero; status from relay/load
     const status: MappedDeviceStatus =
-      plug.switchSta && plug.watts > 0 ? 'discharging' : 'standby';
+      plugResolved.switchSta === true &&
+      typeof plugResolved.watts === 'number' &&
+      plugResolved.watts > 0
+        ? 'discharging'
+        : 'standby';
     return {
       batteryLevel: 0,
       chargeRate: 0,
       dischargeRate: 0,
       status,
-      plug,
+      plug: plugResolved,
       matched,
     };
   }
@@ -520,8 +572,8 @@ export function toDeviceStatusFields(mapped: MappedQuota): {
       dischargeRate: 0,
       status: mapped.status,
       isPlug: true,
-      switchSta: mapped.plug.switchSta,
-      plugWatts: mapped.plug.watts,
+      ...(mapped.plug.switchSta !== undefined ? { switchSta: mapped.plug.switchSta } : {}),
+      ...(mapped.plug.watts !== undefined ? { plugWatts: mapped.plug.watts } : {}),
       ...(mapped.plug.volt !== undefined ? { volt: mapped.plug.volt } : {}),
       ...(mapped.plug.temp !== undefined ? { temp: mapped.plug.temp } : {}),
     };

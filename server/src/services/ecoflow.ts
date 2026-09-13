@@ -6,7 +6,7 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import crypto from 'crypto';
-import { mapQuotaData, toDeviceStatusFields } from '@ecoflow/shared';
+import { mapQuotaData, toDeviceStatusFields, resolveDeviceFamily, isSmartPlugFamily } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import {
   EcoflowDeviceListResponse,
@@ -558,7 +558,8 @@ export class EcoflowService {
         // Parse quota data into device status format
         // Flat keys e.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
         const quotaData = apiResponse.data as Record<string, unknown>;
-        const mapped = mapQuotaData(quotaData);
+        const forcePlug = isSmartPlugFamily(resolveDeviceFamily({ sn: deviceSn }));
+        const mapped = mapQuotaData(quotaData, { forcePlug });
         const statusFields = toDeviceStatusFields(mapped);
 
         return {

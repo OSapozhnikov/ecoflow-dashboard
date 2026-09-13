@@ -122,39 +122,55 @@ export function DeviceDetail() {
                     Smart Plug
                   </h2>
                 )}
-                {typeof data.data.switchSta === 'boolean' ||
-                typeof data.data.plugWatts === 'number' ? (
-                  <div className="space-y-3 text-gray-800 dark:text-gray-200">
-                    {typeof data.data.switchSta === 'boolean' && (
-                      <p>
-                        Switch:{' '}
-                        <span className="font-medium">
-                          {data.data.switchSta ? 'On' : 'Off'}
-                        </span>
-                      </p>
-                    )}
-                    {typeof data.data.plugWatts === 'number' && (
-                      <p>
-                        Power:{' '}
-                        <span className="font-medium">{data.data.plugWatts} W</span>
-                      </p>
-                    )}
-                    {typeof data.data.volt === 'number' && (
-                      <p>
-                        Voltage:{' '}
-                        <span className="font-medium">{data.data.volt} V</span>
-                      </p>
-                    )}
-                    {typeof data.data.temp === 'number' && (
-                      <p>
-                        Temperature:{' '}
-                        <span className="font-medium">{data.data.temp} °C</span>
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-gray-500 dark:text-gray-400">Power unavailable</p>
-                )}
+                {(() => {
+                  const plugWatts = data.data.plugWatts;
+                  const dischargeRate = data.data.dischargeRate;
+                  const chargeRate = data.data.chargeRate;
+                  const displayWatts =
+                    typeof plugWatts === 'number'
+                      ? plugWatts
+                      : typeof dischargeRate === 'number' && dischargeRate > 0
+                        ? dischargeRate
+                        : typeof chargeRate === 'number' && chargeRate > 0
+                          ? chargeRate
+                          : undefined;
+                  const hasSwitch = typeof data.data.switchSta === 'boolean';
+                  if (!hasSwitch && typeof displayWatts !== 'number') {
+                    return (
+                      <p className="text-gray-500 dark:text-gray-400">Power unavailable</p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-3 text-gray-800 dark:text-gray-200">
+                      {hasSwitch && (
+                        <p>
+                          Switch:{' '}
+                          <span className="font-medium">
+                            {data.data.switchSta ? 'On' : 'Off'}
+                          </span>
+                        </p>
+                      )}
+                      {typeof displayWatts === 'number' && (
+                        <p>
+                          Power:{' '}
+                          <span className="font-medium">{displayWatts} W</span>
+                        </p>
+                      )}
+                      {typeof data.data.volt === 'number' && (
+                        <p>
+                          Voltage:{' '}
+                          <span className="font-medium">{data.data.volt} V</span>
+                        </p>
+                      )}
+                      {typeof data.data.temp === 'number' && (
+                        <p>
+                          Temperature:{' '}
+                          <span className="font-medium">{data.data.temp} °C</span>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
