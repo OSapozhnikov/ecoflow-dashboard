@@ -6,6 +6,7 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import crypto from 'crypto';
+import { mapQuotaData } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import {
   EcoflowDeviceListResponse,
@@ -26,9 +27,10 @@ import {
 import { logger } from '../utils/logger';
 import { API_CONFIG } from '../constants';
 
-class EcoflowService {
+export class EcoflowService {
   private client: AxiosInstance;
   private readonly config = getConfig();
+  private lastSuccessAt: number | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -37,6 +39,11 @@ class EcoflowService {
     });
 
     logger.debug('Ecoflow API Base URL:', { url: this.config.ecoflow.apiBaseUrl });
+  }
+
+  /** Timestamp of last successful Ecoflow API response (ms), or null */
+  getLastSuccessAt(): number | null {
+    return this.lastSuccessAt;
   }
 
   /**
@@ -335,7 +342,8 @@ class EcoflowService {
         actualUrl: response.config?.url,
         baseURL: response.config?.baseURL,
       });
-      
+
+      this.lastSuccessAt = Date.now();
       return response.data;
     } catch (error) {
       const axiosError = error as AxiosError<unknown>;
@@ -491,96 +499,18 @@ class EcoflowService {
 
       if (apiResponse.data && typeof apiResponse.data === 'object') {
         // Parse quota data into device status format
-        // According to documentation, quota data comes as object with dot notation keys
-        // E.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
+        // Flat keys e.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
         const quotaData = apiResponse.data as Record<string, unknown>;
-        
-        // Helper function to get value by key (supports dot notation)
-        const getQuotaValue = (keys: string[]): number => {
-          for (const key of keys) {
-            // Try direct key
-            if (key in quotaData) {
-              const value = quotaData[key];
-              if (typeof value === 'string') {
-                const num = parseFloat(value);
-                if (!isNaN(num)) return num;
-              } else if (typeof value === 'number') {
-                return value;
-              }
-            }
-            
-            // Try dot notation keys (e.g., "bmsMaster.soc")
-            for (const quotaKey in quotaData) {
-              if (quotaKey.endsWith(`.${key}`) || quotaKey === key) {
-                const value = quotaData[quotaKey];
-                if (typeof value === 'string') {
-                  const num = parseFloat(value);
-                  if (!isNaN(num)) return num;
-                } else if (typeof value === 'number') {
-                  return value;
-                }
-              }
-            }
-          }
-          return 0;
-        };
-        
-        // Extract battery level (SOC)
-        // According to documentation: "bmsMaster.soc" for Delta Pro
-        // Also try other possible field names
-        const batteryLevel = getQuotaValue([
-          'bmsMaster.soc',      // Delta Pro format (from documentation)
-          'soc',                // Direct SOC
-          'bpSoc',              // Power Ocean format
-          'batteryLevel',        // Alternative format
-          'battery',             // Alternative format
-          'batteryPercent',      // Alternative format
-          'batterySoc',          // Alternative format
-          'batterySOC',          // Alternative format
-        ]);
-
-        // Extract charge/discharge rates
-        // According to documentation: "bmsMaster.inputWatts", "bmsMaster.outputWatts"
-        const chargeRate = getQuotaValue([
-          'bmsMaster.inputWatts',  // Delta Pro format (from documentation)
-          'chargePower',           // Alternative format
-          'chargeRate',            // Alternative format
-          'inputPower',            // Alternative format
-          'inPower',               // Home Assistant format
-          'inWatts',               // Alternative format
-          'pvInputPower',          // Solar input
-          'acInputPower',          // AC input
-        ]);
-
-        const dischargeRateRaw = getQuotaValue([
-          'bmsMaster.outputWatts',  // Delta Pro format (from documentation)
-          'dischargePower',         // Alternative format
-          'dischargeRate',          // Alternative format
-          'outputPower',            // Alternative format
-          'outPower',               // Home Assistant format
-          'outWatts',               // Alternative format
-          'acOutputPower',          // AC output
-        ]);
-        
-        // Discharge rate needs to be divided by 10 (convert from 0.1W units to W)
-        const dischargeRate = dischargeRateRaw / 10;
-
-        // Determine status
-        let status: 'charging' | 'discharging' | 'standby' = 'standby';
-        if (chargeRate > 0) {
-          status = 'charging';
-        } else if (dischargeRate > 0) {
-          status = 'discharging';
-        }
+        const mapped = mapQuotaData(quotaData);
 
         return {
           deviceId: deviceSn,
           data: {
             deviceId: deviceSn,
-            batteryLevel: Math.max(0, Math.min(100, batteryLevel)),
-            chargeRate: Math.max(0, chargeRate),
-            dischargeRate: Math.max(0, Math.round(dischargeRate * 10) / 10), // Round to 1 decimal place
-            status,
+            batteryLevel: mapped.batteryLevel,
+            chargeRate: mapped.chargeRate,
+            dischargeRate: mapped.dischargeRate,
+            status: mapped.status,
             timestamp: Date.now(),
             ...quotaData, // Include all other fields
           },
@@ -601,22 +531,12 @@ class EcoflowService {
           code: errorResponse.code,
           message: errorResponse.message,
         });
-        // Return null to trigger fallback to MQTT or cached data
         throw new Error(`Ecoflow API error: ${errorResponse.message || errorResponse.code}`);
       }
     }
 
-    // Default: return empty status
     logger.warn('Unexpected response structure from Device Status API:', { response });
-    return {
-      deviceId: deviceSn,
-      data: {
-        deviceId: deviceSn,
-        batteryLevel: 0,
-        status: 'standby',
-        timestamp: Date.now(),
-      },
-    };
+    throw new Error('Unexpected response structure from Device Status API');
   }
 
   /**

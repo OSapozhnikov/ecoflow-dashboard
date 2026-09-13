@@ -138,7 +138,7 @@ describe('Status Routes', () => {
       expect(response.body.deviceId).toBeDefined();
     });
 
-    it('should handle REST API errors gracefully', async () => {
+    it('should handle REST API errors with 502 (no invented SOC)', async () => {
       vi.mocked(mqttService.getDeviceStatus).mockResolvedValue(null);
 
       const error = new Error('Failed to fetch device status');
@@ -146,12 +146,14 @@ describe('Status Routes', () => {
 
       const response = await request(app)
         .get('/api/devices/ABC123/status')
-        .expect(200);
+        .expect(502);
 
-      expect(response.body.deviceId).toBe('ABC123');
-      expect(response.body.source).toBe('error');
-      expect(response.body.error).toBeDefined();
-      expect(response.body.warning).toBeDefined();
+      expect(response.body.error).toEqual({
+        message: 'Failed to fetch device status',
+        code: 'STATUS_FETCH_ERROR',
+      });
+      expect(response.body.data).toBeUndefined();
+      expect(response.body.source).toBeUndefined();
     });
 
     it('should subscribe to MQTT when REST fallback is used', async () => {

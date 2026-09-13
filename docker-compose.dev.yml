@@ -1,9 +1,10 @@
 services:
   server:
     build:
-      context: ./server
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: server/Dockerfile.dev
     container_name: ecoflow-server-dev
+    working_dir: /app/server
     ports:
       - "5000:5000"
     dns:
@@ -28,11 +29,12 @@ services:
       - WEBSOCKET_ENABLED=${WEBSOCKET_ENABLED:-true}
       - WEBSOCKET_PATH=${WEBSOCKET_PATH:-/ws}
     volumes:
-      - ./server/src:/app/src:ro
-      - ./server/package.json:/app/package.json:ro
+      - ./server/src:/app/server/src:ro
+      - ./server/package.json:/app/server/package.json:ro
       - ./shared:/app/shared:ro
-      - ./server/coverage:/app/coverage
+      - ./server/coverage:/app/server/coverage
       - /app/node_modules
+      - /app/server/node_modules
     command: npm run dev
     networks:
       - ecoflow-network
@@ -40,22 +42,24 @@ services:
 
   client:
     build:
-      context: ./client
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: client/Dockerfile.dev
     container_name: ecoflow-client-dev
+    working_dir: /app/client
     ports:
       - "3000:3000"
     environment:
       - VITE_API_BASE_URL=http://localhost:5000
       - VITE_API_BASE_URL_DOCKER=http://server:5000
     volumes:
-      - ./client/src:/app/src:ro
-      - ./client/public:/app/public:ro
-      - ./client/index.html:/app/index.html:ro
-      - ./client/vite.config.ts:/app/vite.config.ts:ro
+      - ./client/src:/app/client/src:ro
+      - ./client/public:/app/client/public:ro
+      - ./client/index.html:/app/client/index.html:ro
+      - ./client/vite.config.ts:/app/client/vite.config.ts:ro
       - ./shared:/app/shared:ro
       - /app/node_modules
-      - client-coverage:/app/coverage
+      - /app/client/node_modules
+      - client-coverage:/app/client/coverage
     command: npm run dev -- --host 0.0.0.0
     networks:
       - ecoflow-network
@@ -66,9 +70,10 @@ services:
   # Server tests service
   server-tests:
     build:
-      context: ./server
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: server/Dockerfile.dev
     container_name: ecoflow-server-tests
+    working_dir: /app/server
     environment:
       - NODE_ENV=test
       - ECOFLOW_ACCESS_KEY=${ECOFLOW_ACCESS_KEY:-test-access-key}
@@ -76,13 +81,14 @@ services:
       - ECOFLOW_API_BASE_URL=${ECOFLOW_API_BASE_URL:-https://api-e.ecoflow.com}
       - PORT=5000
     volumes:
-      - ./server/src:/app/src:ro
-      - ./server/package.json:/app/package.json:ro
-      - ./server/vitest.config.ts:/app/vitest.config.ts:ro
-      - ./server/tsconfig.json:/app/tsconfig.json:ro
+      - ./server/src:/app/server/src:ro
+      - ./server/package.json:/app/server/package.json:ro
+      - ./server/vitest.config.ts:/app/server/vitest.config.ts:ro
+      - ./server/tsconfig.json:/app/server/tsconfig.json:ro
       - ./shared:/app/shared:ro
       - /app/node_modules
-      - server-coverage:/app/coverage
+      - /app/server/node_modules
+      - server-coverage:/app/server/coverage
     command: sh -c "npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true && npm run test:coverage"
     networks:
       - ecoflow-network
@@ -92,22 +98,24 @@ services:
   # Client tests service
   client-tests:
     build:
-      context: ./client
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: client/Dockerfile.dev
     container_name: ecoflow-client-tests
+    working_dir: /app/client
     environment:
       - NODE_ENV=test
       - VITE_API_BASE_URL=http://localhost:5000
     volumes:
-      - ./client/src:/app/src:ro
-      - ./client/public:/app/public:ro
-      - ./client/index.html:/app/index.html:ro
-      - ./client/vite.config.ts:/app/vite.config.ts:ro
-      - ./client/vitest.config.ts:/app/vitest.config.ts:ro
-      - ./client/tsconfig.json:/app/tsconfig.json:ro
+      - ./client/src:/app/client/src:ro
+      - ./client/public:/app/client/public:ro
+      - ./client/index.html:/app/client/index.html:ro
+      - ./client/vite.config.ts:/app/client/vite.config.ts:ro
+      - ./client/vitest.config.ts:/app/client/vitest.config.ts:ro
+      - ./client/tsconfig.json:/app/client/tsconfig.json:ro
       - ./shared:/app/shared:ro
       - /app/node_modules
-      - client-coverage:/app/coverage
+      - /app/client/node_modules
+      - client-coverage:/app/client/coverage
     command: sh -c "npm install @vitest/coverage-v8 --save-dev 2>/dev/null || true && npm run test:coverage"
     networks:
       - ecoflow-network
@@ -184,4 +192,3 @@ volumes:
 networks:
   ecoflow-network:
     driver: bridge
-

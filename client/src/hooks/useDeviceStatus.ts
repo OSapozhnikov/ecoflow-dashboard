@@ -3,7 +3,7 @@
  * Uses WebSocket for real-time updates, falls back to polling if WebSocket unavailable
  */
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
 import { websocketClient, DeviceStatusUpdate } from '../services/websocket';
@@ -23,11 +23,11 @@ export function useDeviceStatus(deviceId: string, enabled: boolean = true) {
   // Memoize refetch interval function
   const refetchIntervalFn = useCallback(
     () => {
-      // If WebSocket is connected, poll every 10 seconds to check MQTT status
+      // If WebSocket is connected, poll infrequently (REST is a backup to MQTT)
       if (wsConnected) {
         return REFETCH_INTERVALS.DEVICE_STATUS_WS;
       }
-      // Fallback polling every 5 seconds if WebSocket unavailable
+      // Fallback polling when WebSocket unavailable
       return REFETCH_INTERVALS.DEVICE_STATUS;
     },
     [wsConnected]

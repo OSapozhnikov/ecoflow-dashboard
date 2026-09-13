@@ -1,16 +1,23 @@
 FROM node:22-alpine
 WORKDIR /app
 
-# Встановлення залежностей
-COPY package*.json ./
-RUN npm ci
+# Monorepo: install from root lockfile (build context must be repo root)
+COPY package.json package-lock.json ./
+COPY client/package.json ./client/
+COPY server/package.json ./server/
+COPY shared/package.json ./shared/
 
-# Копіювання коду (буде замонтовано як volume в docker-compose)
-COPY . .
+# Ignore lifecycle scripts (root prepare→husky); legacy-peer-deps for workspace resolution
+RUN npm ci --workspace=client --include-workspace-root=false --legacy-peer-deps --ignore-scripts
 
-# Відкриваємо порт Vite dev server
+# Shared sources (path alias @shared → ../shared/src); overridden by compose volume
+COPY shared ./shared
+
+# Client sources (overridden by compose volumes in dev)
+COPY client ./client
+
+WORKDIR /app/client
+
 EXPOSE 3000
 
-# Запуск Vite dev server
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
-

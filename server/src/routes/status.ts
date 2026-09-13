@@ -45,7 +45,7 @@ const router = Router();
  *       429:
  *         $ref: '#/components/responses/RateLimitExceeded'
  */
-router.get('/:deviceId/status', async (req: Request, res: Response): Promise<void> => {
+router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: Response): Promise<void> => {
   const start = Date.now();
   const endpoint = '/api/devices/:deviceId/status';
   const { deviceId } = req.params;
@@ -110,28 +110,18 @@ router.get('/:deviceId/status', async (req: Request, res: Response): Promise<voi
       });
     } catch (restError) {
       const err = restError as Error;
-      
-      // Record error metrics
+
+      // Record error metrics — honest failure, no invented SOC
       const duration = (Date.now() - start) / 1000;
-      const statusCode = '200'; // Still returns 200 with error data
+      const statusCode = '502';
       apiRequestDuration.observe({ endpoint, status_code: statusCode }, duration);
       apiRequestTotal.inc({ endpoint, status_code: statusCode });
-      
-      // If REST API also fails, return error
-      res.status(200).json({
-        deviceId,
-        data: {
-          deviceId,
-          batteryLevel: 0,
-          status: 'standby' as const,
-          timestamp: Date.now(),
-        },
-        source: 'error',
+
+      res.status(502).json({
         error: {
           message: err.message || 'Failed to fetch device status',
           code: 'STATUS_FETCH_ERROR',
         },
-        warning: 'Unable to fetch device status from MQTT or REST API. Please check device connection.',
       });
     }
   } catch (error) {

@@ -48,17 +48,20 @@ class WebSocketClient {
   }
 
   /**
-   * Get WebSocket URL
+   * Get WebSocket URL — same-origin by default; VITE_API_BASE_URL overrides.
    */
   private getWebSocketUrl(): string {
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
-    
-    // Convert HTTP to WebSocket protocol
-    const wsUrl = apiBaseUrl
-      .replace('http://', 'ws://')
-      .replace('https://', 'wss://');
-    
-    return `${wsUrl}/ws`;
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+
+    if (apiBaseUrl) {
+      const wsUrl = apiBaseUrl
+        .replace('http://', 'ws://')
+        .replace('https://', 'wss://');
+      return `${wsUrl}/ws`;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
   }
 
   /**

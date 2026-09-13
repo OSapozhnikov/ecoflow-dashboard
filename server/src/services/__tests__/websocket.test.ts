@@ -39,22 +39,26 @@ vi.mock('ws', () => {
   };
 });
 
-// Mock shared constants first
-vi.mock('../../shared/src/constants', () => ({
-  API_CONFIG: {
-    TIMEOUT: 10000,
-  },
-  RECONNECT_CONFIG: {
-    MQTT: {
-      MAX_ATTEMPTS: 5,
-      DELAY: 1000,
+// Mock shared package constants (keep mapper exports)
+vi.mock('@ecoflow/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@ecoflow/shared')>();
+  return {
+    ...actual,
+    API_CONFIG: {
+      TIMEOUT: 10000,
     },
-  },
-  WEBSOCKET_CONFIG: {
-    RECONNECT_DELAY: 1000,
-    PING_INTERVAL: 30000,
-  },
-}));
+    RECONNECT_CONFIG: {
+      MQTT: {
+        MAX_ATTEMPTS: 5,
+        DELAY: 1000,
+      },
+    },
+    WEBSOCKET_CONFIG: {
+      RECONNECT_DELAY: 1000,
+      PING_INTERVAL: 30000,
+    },
+  };
+});
 
 // Mock config
 const mockGetConfig = vi.fn(() => ({

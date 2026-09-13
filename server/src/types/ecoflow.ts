@@ -1,37 +1,22 @@
 /**
  * TypeScript types for Ecoflow API responses
+ * Shared device types come from @ecoflow/shared; MQTT cert types stay server-only.
  */
 
-export interface EcoflowDevice {
-  sn: string; // Serial number (primary identifier)
-  deviceName: string;
-  deviceType?: string;
-  productName?: string;
-  online: number | boolean; // API returns 1/0, we convert to boolean
-  deviceId?: string; // May be derived from sn
-  deviceSn?: string; // Alias for sn
-  bindTime?: number;
-  [key: string]: unknown; // For additional fields from API
-}
+export type {
+  BaseDevice as EcoflowDevice,
+  BaseDeviceListResponse as EcoflowDeviceListResponse,
+  BaseDeviceStatus as EcoflowDeviceStatus,
+  BaseDeviceStatusResponse as EcoflowDeviceStatusResponse,
+  DeviceStatus,
+  DataSource,
+  BaseApiError,
+} from '@ecoflow/shared';
 
-export interface EcoflowDeviceListResponse {
-  devices: EcoflowDevice[];
-  total: number;
-}
-
-export interface EcoflowDeviceStatus {
+/** Narrow status response used by REST service (no source/timestamp required) */
+export interface EcoflowRestStatusResponse {
   deviceId: string;
-  batteryLevel: number;
-  chargeRate?: number;
-  dischargeRate?: number;
-  status: 'charging' | 'discharging' | 'standby';
-  timestamp: number;
-  [key: string]: unknown; // For additional fields from API
-}
-
-export interface EcoflowDeviceStatusResponse {
-  deviceId: string;
-  data: EcoflowDeviceStatus;
+  data: import('@ecoflow/shared').BaseDeviceStatus;
 }
 
 export interface EcoflowErrorResponse {
@@ -53,4 +38,3 @@ export interface EcoflowMQTTCertificationResponse {
   message: string;
   data: EcoflowMQTTCertification;
 }
-

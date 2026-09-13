@@ -5,6 +5,7 @@
 
 import mqtt, { MqttClient, IClientOptions } from 'mqtt';
 import { EventEmitter } from 'events';
+import { mapQuotaData } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import { ecoflowService } from './ecoflow';
 import type { EcoflowDeviceStatus, EcoflowMQTTCertification } from '../types/ecoflow';
@@ -29,7 +30,7 @@ export interface DeviceStatusUpdate {
 /**
  * MQTT Service - Primary solution for device status
  */
-class MQTTService extends EventEmitter {
+export class MQTTService extends EventEmitter {
   private client: MqttClient | null = null;
   private config = getConfig();
   private isConnected = false;
@@ -41,6 +42,7 @@ class MQTTService extends EventEmitter {
   private fallbackToRest = false;
   private mqttCertification: EcoflowMQTTCertification | null = null;
   private certificationExpiry: number = 0; // Timestamp when certification expires (24 hours)
+  private lastSuccessAt: number | null = null;
 
   constructor() {
     super();
@@ -380,6 +382,7 @@ class MQTTService extends EventEmitter {
 
         // Cache the status
         this.statusCache.set(deviceSn, update);
+        this.lastSuccessAt = update.timestamp;
         
         // Update cache size metric
         deviceStatusCacheSize.set(this.statusCache.size);
@@ -420,280 +423,97 @@ class MQTTService extends EventEmitter {
 
       const obj = data as Record<string, unknown>;
 
-      // According to documentation, MQTT messages have structure:
-      // Request: { id, version, operateType, from, params: { ... } }
-      // Reply: { id, version, operateType, code, message, data: { ... } }
-      // But some devices send: { cmdId, cmdFunc, addr, params: { ... } }
       let params: Record<string, unknown> | null = null;
       let dataField: Record<string, unknown> | null = null;
 
-      // Check for 'data' field first (reply messages)
       if ('data' in obj && typeof obj.data === 'object' && obj.data !== null) {
         dataField = obj.data as Record<string, unknown>;
       }
 
-      // Check for 'params' field (request/report messages)
       if ('params' in obj && typeof obj.params === 'object' && obj.params !== null) {
         params = obj.params as Record<string, unknown>;
       }
 
-      // If neither params nor data, try to use obj directly
       if (!params && !dataField) {
         params = obj;
       }
 
-      // Combine params and data for searching (data takes priority in replies)
-      const searchData: Record<string, unknown> = dataField 
-        ? { ...params, ...dataField } // Merge params and data, data overrides
+      const searchData: Record<string, unknown> = dataField
+        ? { ...(params || {}), ...dataField }
         : (params || obj);
 
-      // Deep search for battery and power data in nested structures
-      // Also handles dot notation like "pcsAPhase.actPwr"
-      const deepSearch = (obj: Record<string, unknown>, keys: string[]): number | null => {
-        for (const key of keys) {
-          // Direct access
-          if (key in obj && typeof obj[key] === 'number') {
-            return obj[key] as number;
-          }
-          
-          // Handle dot notation (e.g., "pcsAPhase.actPwr")
-          if (key.includes('.')) {
-            const parts = key.split('.');
-            let current: unknown = obj;
-            for (const part of parts) {
-              if (typeof current === 'object' && current !== null && part in current) {
-                current = (current as Record<string, unknown>)[part];
-              } else {
-                current = null;
-                break;
-              }
-            }
-            if (typeof current === 'number') {
-              return current;
-            }
-          }
-          
-          // Search in nested objects
-          for (const [, v] of Object.entries(obj)) {
-            if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-              const nested = deepSearch(v as Record<string, unknown>, keys);
-              if (nested !== null) return nested;
-            }
-          }
-        }
-        return null;
-      };
+      const sources: Record<string, unknown>[] = [searchData];
+      if (dataField) sources.push(dataField);
+      if (params) sources.push(params);
+      sources.push(obj);
 
-      // Extract battery level (SOC - State of Charge)
-      // Based on hassio-ecoflow-cloud: Power Battery SOC, bpSoc
-      // Try multiple possible field names and locations using deep search
-      // Also check for nested structures and different naming conventions
-      const socKeys = [
-        'soc', 'batteryLevel', 'battery', 'batteryPercent', 'socLevel', 
-        'remainCap', 'remainingCapacity', 'cap', 'capacity',
-        'bpSoc', // Power Ocean format
-        'powerBatterySoc', 'powerBatterySOC', // Home Assistant format
-        'batterySoc', 'batterySOC', // Alternative formats
-        'socPercent', 'batteryPercent', // Percent formats
-      ];
-      
-      // Try deep search first (handles nested structures and dot notation)
-      // Search in: data field (replies), params field, and obj directly
-      let batteryLevel = 
-        deepSearch(searchData, socKeys) || 
-        deepSearch(dataField || {}, socKeys) ||
-        deepSearch(params || {}, socKeys) || 
-        deepSearch(obj, socKeys);
-      
-      // If deep search didn't find it, try direct access
-      // Priority: data field (replies) > params > obj
-      if (batteryLevel === null || batteryLevel === undefined) {
-        batteryLevel = 
-          (dataField?.soc as number) ||
-          (dataField?.bpSoc as number) || // Power Ocean
-          (dataField?.batteryLevel as number) ||
-          (dataField?.battery as number) ||
-          (dataField?.batteryPercent as number) ||
-          (dataField?.batterySoc as number) ||
-          (dataField?.batterySOC as number) ||
-          (params?.soc as number) || 
-          (params?.bpSoc as number) || // Power Ocean
-          (params?.batteryLevel as number) || 
-          (params?.battery as number) || 
-          (params?.batteryPercent as number) ||
-          (params?.socLevel as number) ||
-          (params?.remainCap as number) ||
-          (params?.batterySoc as number) ||
-          (params?.batterySOC as number) ||
-          (obj.soc as number) ||
-          (obj.bpSoc as number) ||
-          (obj.batteryLevel as number) ||
-          (obj.battery as number) ||
-          (obj.batteryPercent as number) ||
-          (obj.batterySoc as number) ||
-          (obj.batterySOC as number) ||
-          0;
-      }
-      
-      // Ensure batteryLevel is a number
-      batteryLevel = typeof batteryLevel === 'number' ? batteryLevel : 0;
+      const consWattRaw =
+        (dataField?.consWatt as number | undefined) ??
+        (params?.consWatt as number | undefined) ??
+        (obj.consWatt as number | undefined);
+      const wattsRaw =
+        (dataField?.watts as number | undefined) ??
+        (params?.watts as number | undefined) ??
+        (obj.watts as number | undefined);
 
-      // Extract charge/discharge rates (in watts)
-      // Based on real MQTT messages: consWatt (negative = discharge, positive = charge), watts (output power)
-      // Also try multiple possible field names using deep search
-      const chargeKeys = [
-        'chargePower', 'chargeRate', 'inputPower', 'inWatts', 'inPutWatts', 
-        'pvInputPower', 'acInputPower', 'inputWatts', 'inPower', 'chargeWatts',
-        'inPwr', 'inPwrWatts', // Alternative formats
-        'pcsAPhase.actPwr', 'pcsBPhase.actPwr', 'pcsCPhase.actPwr', // Power Ocean phases
-        'mpptPv1.pwr', 'mpptPv2.pwr', // Solar input
-        'powerBattery', // Battery power (can be charge or discharge)
-      ];
-      
-      // consWatt: negative = discharge, positive = charge
-      // If consWatt is positive, it means charging
-      // Check in data field (replies), params, and obj
-      const consWatt = 
-        (dataField?.consWatt as number) ||
-        (params?.consWatt as number) || 
-        (obj.consWatt as number) || 
-        0;
-      
-      const chargeRate = 
-        (consWatt > 0 ? consWatt : 0) || // If consWatt is positive, it's charge rate
-        deepSearch(searchData, chargeKeys) ||
-        deepSearch(dataField || {}, chargeKeys) ||
-        deepSearch(params || {}, chargeKeys) ||
-        deepSearch(obj, chargeKeys) ||
-        (dataField?.chargePower as number) ||
-        (dataField?.inputPower as number) ||
-        (dataField?.inPower as number) ||
-        (params?.chargePower as number) || 
-        (params?.chargeRate as number) || 
-        (params?.inputPower as number) ||
-        (params?.inPower as number) || // Home Assistant format
-        (params?.inWatts as number) ||
-        (params?.inPutWatts as number) ||
-        (params?.pvInputPower as number) ||
-        (params?.acInputPower as number) ||
-        (obj.chargePower as number) ||
-        (obj.inputPower as number) ||
-        (obj.inPower as number) ||
-        0;
-
-      const dischargeKeys = [
-        'dischargePower', 'dischargeRate', 'outputPower', 'outWatts', 
-        'outPutWatts', 'acOutputPower', 'outputWatts', 'outPower', 'dischargeWatts',
-        'outPwr', 'outPwrWatts', // Alternative formats
-        'powerAC', 'powerACSYS', // AC output power
-      ];
-      
-      // consWatt: negative = discharge, watts = output power
-      // If consWatt is negative, use abs(consWatt) as discharge rate
-      // Also try watts field (output power)
-      // Check in data field (replies), params, and obj
-      const watts = 
-        (dataField?.watts as number) ||
-        (params?.watts as number) || 
-        (obj.watts as number) || 
-        0;
-      
-      const dischargeRateRaw = 
-        (consWatt < 0 ? Math.abs(consWatt) : 0) || // If consWatt is negative, it's discharge rate
-        watts || // watts is output power (discharge)
-        deepSearch(searchData, dischargeKeys) ||
-        deepSearch(dataField || {}, dischargeKeys) ||
-        deepSearch(params || {}, dischargeKeys) ||
-        deepSearch(obj, dischargeKeys) ||
-        (dataField?.dischargePower as number) ||
-        (dataField?.outputPower as number) ||
-        (dataField?.outPower as number) ||
-        (params?.dischargePower as number) || 
-        (params?.dischargeRate as number) || 
-        (params?.outputPower as number) ||
-        (params?.outPower as number) || // Home Assistant format
-        (params?.outWatts as number) ||
-        (params?.outPutWatts as number) ||
-        (params?.acOutputPower as number) ||
-        (obj.dischargePower as number) ||
-        (obj.outputPower as number) ||
-        (obj.outPower as number) ||
-        0;
-      
-      // Discharge rate needs to be divided by 10 (convert from 0.1W units to W)
-      const dischargeRate = typeof dischargeRateRaw === 'number' ? dischargeRateRaw / 10 : 0;
-
-      // Determine status based on charge/discharge rates
-      // consWatt: negative = discharging, positive = charging, zero = standby
-      let status: 'charging' | 'discharging' | 'standby' = 'standby';
-      if (consWatt > 0 || chargeRate > 0) {
-        status = 'charging';
-      } else if (consWatt < 0 || dischargeRate > 0) {
-        status = 'discharging';
-      }
-
-      // Log parsed values for debugging MQTT data
-      logger.debug(`🔍 Parsed values for ${deviceSn}:`, {
-        batteryLevel,
-        chargeRate,
-        dischargeRate,
-        status,
-        hasDataField: !!dataField,
-        hasParams: !!params,
-        dataKeys: dataField ? Object.keys(dataField) : [],
-        paramsKeys: params ? Object.keys(params) : [],
-        objKeys: Object.keys(obj),
+      const mapped = mapQuotaData(sources, {
+        consWatt: typeof consWattRaw === 'number' ? consWattRaw : undefined,
+        watts: typeof wattsRaw === 'number' ? wattsRaw : undefined,
       });
 
-      // Always return status if we have any data, even if batteryLevel is 0
-      // This allows us to show partial data while waiting for complete information
-      const hasData = (dataField && Object.keys(dataField).length > 0) || 
-                     (params && Object.keys(params).length > 0) || 
-                     Object.keys(obj).length > 0;
-      
-      if (hasData) {
-        // Create status object
-        const statusData = {
-          deviceId: deviceSn,
-          batteryLevel: Math.max(0, Math.min(100, batteryLevel)), // Clamp to 0-100
-          chargeRate: Math.max(0, chargeRate),
-          dischargeRate: Math.max(0, Math.round(dischargeRate * 10) / 10), // Round to 1 decimal place
-          status,
-          timestamp: Date.now(),
-          // Include all raw params for debugging and future use
-          ...params,
-        };
+      logger.debug(`🔍 Parsed values for ${deviceSn}:`, {
+        batteryLevel: mapped.batteryLevel,
+        chargeRate: mapped.chargeRate,
+        dischargeRate: mapped.dischargeRate,
+        status: mapped.status,
+        matched: mapped.matched,
+        hasDataField: !!dataField,
+        hasParams: !!params,
+      });
 
-        // Validate with zod schema
-        const parseResult = safeParseEcoflowDeviceStatus(statusData);
-        if (parseResult.success) {
-          return parseResult.data;
-        } else {
-          // Log validation errors but still return data (with warning)
-          logger.warn(`⚠️  MQTT status validation failed for ${deviceSn}:`, {
-            errors: parseResult.error.issues,
-          });
-          // Return unvalidated data but log warning
-          if (batteryLevel === 0 && chargeRate === 0 && dischargeRate === 0) {
-            logger.warn(`⚠️  No battery/charge data found for ${deviceSn}. Full structure:`, {
-              data: dataField,
-              params: params,
-              obj: obj,
-              dataKeys: dataField ? Object.keys(dataField) : [],
-              paramsKeys: params ? Object.keys(params) : [],
-              objKeys: Object.keys(obj),
-            });
-          }
-          return statusData;
-        }
+      const hasData =
+        (dataField && Object.keys(dataField).length > 0) ||
+        (params && Object.keys(params).length > 0) ||
+        Object.keys(obj).length > 0;
+
+      if (!hasData) {
+        return null;
       }
 
-      return null;
+      const statusData = {
+        deviceId: deviceSn,
+        batteryLevel: mapped.batteryLevel,
+        chargeRate: mapped.chargeRate,
+        dischargeRate: mapped.dischargeRate,
+        status: mapped.status,
+        timestamp: Date.now(),
+        ...(params || {}),
+      };
+
+      const parseResult = safeParseEcoflowDeviceStatus(statusData);
+      if (parseResult.success) {
+        return parseResult.data;
+      }
+
+      logger.warn(`⚠️  MQTT status validation failed for ${deviceSn}:`, {
+        errors: parseResult.error.issues,
+      });
+
+      if (
+        mapped.batteryLevel === 0 &&
+        mapped.chargeRate === 0 &&
+        mapped.dischargeRate === 0
+      ) {
+        logger.warn(`⚠️  No battery/charge data found for ${deviceSn}. Full structure:`, {
+          data: dataField,
+          params: params,
+          obj: obj,
+        });
+      }
+      return statusData;
     } catch (error) {
       const err = error as Error;
       logger.error('Error parsing device status:', { error: err.message, stack: err.stack });
-      // Don't throw error here, just return null to allow fallback to REST
-      // But log it for debugging
       return null;
     }
   }
@@ -728,6 +548,11 @@ class MQTTService extends EventEmitter {
    */
   isMQTTConnected(): boolean {
     return this.isConnected && !this.fallbackToRest;
+  }
+
+  /** Timestamp of last successfully parsed MQTT device status (ms), or null */
+  getLastSuccessAt(): number | null {
+    return this.lastSuccessAt;
   }
 
   /**

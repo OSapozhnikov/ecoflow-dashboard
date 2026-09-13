@@ -267,7 +267,7 @@ describe('ApiClient', () => {
       await expect(apiClient.getDeviceStatus('ABC123')).rejects.toThrow('Device not found');
     });
 
-    it('should handle invalid response format', async () => {
+    it('should reject invalid response format instead of inventing SOC', async () => {
       const invalidResponse = {
         deviceId: 'ABC123',
         // Missing data field
@@ -278,12 +278,51 @@ describe('ApiClient', () => {
         status: 200,
       });
 
-      const result = await apiClient.getDeviceStatus('ABC123');
+      await expect(apiClient.getDeviceStatus('ABC123')).rejects.toThrow(
+        'Invalid device status response format'
+      );
+    });
 
-      expect(result.deviceId).toBe('ABC123');
-      expect(result.data).toBeDefined();
-      expect(result.data.batteryLevel).toBe(0);
-      expect(result.source).toBe('error');
+    it('should reject source=error payloads instead of treating 0% as real', async () => {
+      mockGet.mockResolvedValue({
+        data: {
+          deviceId: 'ABC123',
+          data: {
+            deviceId: 'ABC123',
+            batteryLevel: 0,
+            status: 'standby',
+            timestamp: Date.now(),
+          },
+          source: 'error',
+        },
+        status: 200,
+      });
+
+      await expect(apiClient.getDeviceStatus('ABC123')).rejects.toThrow(
+        'Device status unavailable'
+      );
+    });
+
+    it('should surface 502 STATUS_FETCH_ERROR message', async () => {
+      const errorResponse = {
+        response: {
+          status: 502,
+          data: {
+            error: {
+              message: 'Failed to fetch device status',
+              code: 'STATUS_FETCH_ERROR',
+            },
+          },
+        },
+        isAxiosError: true,
+        config: { url: '/api/devices/ABC123/status', method: 'get' },
+      };
+
+      mockGet.mockRejectedValue(errorResponse);
+
+      await expect(apiClient.getDeviceStatus('ABC123')).rejects.toThrow(
+        'Failed to fetch device status'
+      );
     });
 
     it('should handle rate limiting', async () => {

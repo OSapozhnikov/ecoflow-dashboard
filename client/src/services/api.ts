@@ -6,7 +6,6 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import type {
   DeviceListResponse,
   DeviceStatusResponse,
-  ApiError,
 } from '../types/ecoflow';
 import {
   safeParseDeviceListResponse,
@@ -17,23 +16,21 @@ import { RateLimiter } from '../utils/rateLimiter';
 import { RATE_LIMIT_CONFIG } from '../constants';
 import { errorReporter } from '../utils/errorReporting';
 
-// Determine API base URL
-// In Docker, use service name. Locally, use localhost
+/**
+ * Same-origin by default (empty base → relative `/api/...`).
+ * Override with VITE_API_BASE_URL when the API is on another origin.
+ */
 const getApiBaseUrl = (): string => {
-  // Check if we have explicit URL from env
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  
-  // Default to localhost for local development
-  return 'http://localhost:5000';
+  return '';
 };
 
 const API_BASE_URL = getApiBaseUrl();
 
-// Log API URL for debugging (only in development)
 if (import.meta.env.DEV) {
-  console.log('API Base URL:', API_BASE_URL);
+  console.log('API Base URL:', API_BASE_URL || '(same-origin)');
 }
 
 class ApiClient {
@@ -49,7 +46,6 @@ class ApiClient {
       },
     });
 
-    // Initialize rate limiter
     this.rateLimiter = new RateLimiter(
       RATE_LIMIT_CONFIG.MAX_REQUESTS,
       RATE_LIMIT_CONFIG.WINDOW_MS
@@ -58,8 +54,7 @@ class ApiClient {
 
   private handleError(error: unknown): never {
     const axiosError = error as AxiosError<unknown>;
-    
-    // Report error to error reporting service
+
     errorReporter.reportError(
       axiosError instanceof Error ? axiosError : new Error(String(axiosError)),
       {
@@ -71,23 +66,22 @@ class ApiClient {
         responseData: axiosError.response?.data,
       }
     );
-    
-    // Try to parse error response
+
     if (axiosError.response?.data) {
       const errorParse = safeParseApiError(axiosError.response.data);
       if (errorParse.success) {
         throw new Error(errorParse.data.error.message);
       }
     }
-    
-    // Handle network errors
+
     if (axiosError.code === 'ECONNREFUSED' || axiosError.code === 'ERR_NETWORK') {
+      const target = API_BASE_URL || 'this origin';
       throw new Error(
-        `Cannot connect to backend server at ${API_BASE_URL}. ` +
-        'Please make sure the backend is running.'
+        `Cannot connect to backend server at ${target}. ` +
+          'Please make sure the backend is running.'
       );
     }
-    
+
     throw new Error(axiosError.message || 'An unknown error occurred');
   }
 
@@ -95,7 +89,6 @@ class ApiClient {
    * Get list of devices
    */
   async getDevices(): Promise<DeviceListResponse> {
-    // Check rate limit
     if (!this.rateLimiter.canMakeRequest()) {
       const waitTime = this.rateLimiter.getTimeUntilNextRequest();
       throw new Error(
@@ -105,21 +98,16 @@ class ApiClient {
 
     try {
       const response = await this.client.get<unknown>('/api/devices');
-      
-      // Log response in development for debugging
+
       if (import.meta.env.DEV) {
         console.log('Devices API Response:', response.data);
       }
-      
-      // Handle different response structures
+
       let dataToValidate: unknown = response.data;
-      
-      // If response has devices array directly
+
       if (Array.isArray(response.data)) {
         dataToValidate = { devices: response.data, total: response.data.length };
-      }
-      // If response has data.devices (nested)
-      else if (response.data && typeof response.data === 'object' && 'data' in response.data) {
+      } else if (response.data && typeof response.data === 'object' && 'data' in response.data) {
         const nested = response.data as { data?: { devices?: unknown[]; total?: number } };
         if (nested.data?.devices && Array.isArray(nested.data.devices)) {
           dataToValidate = {
@@ -128,22 +116,19 @@ class ApiClient {
           };
         }
       }
-      
-      // Validate with zod schema
+
       const parseResult = safeParseDeviceListResponse(dataToValidate);
       if (parseResult.success) {
         return parseResult.data;
       }
-      
-      // If validation fails, try to extract devices manually
+
       const data = response.data as { devices?: unknown[]; total?: number };
       if (data?.devices && Array.isArray(data.devices)) {
-        // Validate each device individually
         const validatedDevices = data.devices.filter((device) => {
           const deviceParse = safeParseDeviceListResponse({ devices: [device], total: 1 });
           return deviceParse.success;
         });
-        
+
         if (validatedDevices.length > 0) {
           return {
             devices: validatedDevices as DeviceListResponse['devices'],
@@ -151,8 +136,7 @@ class ApiClient {
           };
         }
       }
-      
-      // Default: return empty array with warning
+
       console.warn('Unexpected API response structure:', response.data);
       console.warn('Validation errors:', parseResult.error.issues);
       return {
@@ -168,7 +152,6 @@ class ApiClient {
    * Get device status
    */
   async getDeviceStatus(deviceId: string): Promise<DeviceStatusResponse> {
-    // Check rate limit
     if (!this.rateLimiter.canMakeRequest()) {
       const waitTime = this.rateLimiter.getTimeUntilNextRequest();
       throw new Error(
@@ -180,38 +163,31 @@ class ApiClient {
       const response = await this.client.get<unknown>(
         `/api/devices/${deviceId}/status`
       );
-      
-      // Validate response with zod schema
+
       const parseResult = safeParseDeviceStatusResponse(response.data);
       if (parseResult.success) {
+        // Never treat error-source payloads as real SOC readings
+        if (parseResult.data.source === 'error') {
+          throw new Error('Device status unavailable');
+        }
         return parseResult.data;
       }
-      
-      // If validation fails, log warning and try to return partial data
+
       console.warn('Device status validation failed:', parseResult.error.issues);
       console.warn('Response data:', response.data);
-      
-      // Try to extract at least deviceId and basic structure
-      const data = response.data as { deviceId?: string; data?: unknown };
-      if (data?.deviceId) {
-        return {
-          deviceId: data.deviceId,
-          data: {
-            deviceId: data.deviceId,
-            batteryLevel: 0,
-            status: 'standby',
-            timestamp: Date.now(),
-          },
-          source: 'error',
-        };
-      }
-      
+
       throw new Error('Invalid device status response format');
     } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message === 'Device status unavailable' ||
+          error.message === 'Invalid device status response format')
+      ) {
+        throw error;
+      }
       this.handleError(error);
     }
   }
 }
 
 export const apiClient = new ApiClient();
-

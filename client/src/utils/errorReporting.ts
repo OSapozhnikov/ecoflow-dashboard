@@ -7,6 +7,7 @@ interface ErrorContext {
   userId?: string;
   tags?: Record<string, string>;
   extra?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 class ErrorReporter {
@@ -53,7 +54,9 @@ class ErrorReporter {
    */
   reportMessage(message: string, level: 'info' | 'warning' | 'error' = 'info', context?: ErrorContext): void {
     if (import.meta.env.DEV) {
-      console[level]('Message reported:', message, context);
+      const log =
+        level === 'warning' ? console.warn : level === 'error' ? console.error : console.info;
+      log('Message reported:', message, context);
     }
 
     if (this.initialized && this.sentryDsn) {
@@ -67,7 +70,7 @@ class ErrorReporter {
   /**
    * Set user context
    */
-  setUser(userId: string, email?: string): void {
+  setUser(_userId: string, _email?: string): void {
     if (this.initialized && this.sentryDsn) {
       // Sentry.setUser({ id: userId, email });
     }

@@ -1,17 +1,28 @@
 /**
- * TypeScript types for Ecoflow API responses (Frontend)
+ * Frontend Ecoflow types — aliases over @ecoflow/shared without the open index signature,
+ * so React keys / JSX stay typed as string.
  */
 
+import type {
+  BaseDeviceStatus,
+  BaseDeviceStatusResponse,
+  BaseApiError,
+  DeviceStatus as SharedDeviceStatusEnum,
+  DataSource,
+} from '@ecoflow/shared';
+
+export type { SharedDeviceStatusEnum as DeviceStatusEnum, DataSource };
+
 export interface Device {
-  sn: string; // Serial number (primary identifier)
+  sn: string;
   deviceName: string;
   deviceType?: string;
   productName?: string;
-  online: number | boolean; // API returns 1/0
-  deviceId?: string; // Derived from sn if needed
-  deviceSn?: string; // Alias for sn
+  /** API may send 1/0 before schema normalization */
+  online: number | boolean;
+  deviceId?: string;
+  deviceSn?: string;
   bindTime?: number;
-  [key: string]: unknown; // For additional fields
 }
 
 export interface DeviceListResponse {
@@ -19,27 +30,10 @@ export interface DeviceListResponse {
   total: number;
 }
 
-export interface DeviceStatus {
-  deviceId: string;
-  batteryLevel: number;
-  chargeRate?: number;
-  dischargeRate?: number;
-  status: 'charging' | 'discharging' | 'standby';
-  timestamp: number;
-  [key: string]: unknown;
-}
+export type DeviceStatus = BaseDeviceStatus;
 
-export interface DeviceStatusResponse {
-  deviceId: string;
+export type DeviceStatusResponse = Omit<BaseDeviceStatusResponse, 'data'> & {
   data: DeviceStatus;
-  source?: 'mqtt' | 'rest' | 'error';
-  timestamp?: number;
-}
+};
 
-export interface ApiError {
-  error: {
-    message: string;
-    code: string;
-  };
-}
-
+export type ApiError = BaseApiError;

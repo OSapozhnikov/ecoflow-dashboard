@@ -14,6 +14,8 @@ import { register } from './utils/metrics';
 import { swaggerSpec } from './config/swagger';
 import devicesRouter from './routes/devices';
 import statusRouter from './routes/status';
+import { mqttService } from './services/mqtt';
+import { ecoflowService } from './services/ecoflow';
 
 export function createApp(): Express {
   const app = express();
@@ -54,16 +56,19 @@ export function createApp(): Express {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Security headers
+  // Security headers — unsafe-eval only in development (Swagger UI)
+  const isDev = config.nodeEnv === 'development';
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
-          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Needed for Swagger UI
+          scriptSrc: isDev
+            ? ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
+            : ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:', 'https:'],
-          connectSrc: ["'self'", 'http://localhost:*', 'ws:', 'wss:'], // Allow API calls and WebSocket
+          connectSrc: ["'self'", 'ws:', 'wss:'],
           fontSrc: ["'self'", 'data:'],
         },
       },
@@ -100,6 +105,42 @@ export function createApp(): Express {
    */
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  /**
+   * Readiness: MQTT connected (when enabled) + at least one successful
+   * Ecoflow REST or MQTT data timestamp.
+   */
+  app.get('/ready', (_req, res) => {
+    const mqttEnabled = Boolean(config.ecoflow.mqtt?.enabled);
+    const mqttConnected = mqttService.isMQTTConnected();
+    const lastMqttSuccessAt = mqttService.getLastSuccessAt();
+    const lastEcoflowSuccessAt = ecoflowService.getLastSuccessAt();
+    const hasDataSuccess =
+      lastMqttSuccessAt !== null || lastEcoflowSuccessAt !== null;
+
+    const ready = mqttEnabled
+      ? mqttConnected && hasDataSuccess
+      : hasDataSuccess;
+
+    const body = {
+      status: ready ? 'ready' : 'not_ready',
+      mqtt: {
+        enabled: mqttEnabled,
+        connected: mqttConnected,
+        lastSuccessAt: lastMqttSuccessAt
+          ? new Date(lastMqttSuccessAt).toISOString()
+          : null,
+      },
+      ecoflow: {
+        lastSuccessAt: lastEcoflowSuccessAt
+          ? new Date(lastEcoflowSuccessAt).toISOString()
+          : null,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    res.status(ready ? 200 : 503).json(body);
   });
 
   // Prometheus metrics endpoint

@@ -20,7 +20,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["../shared/src/*", "../shared/dist/*"]
+      "@shared/*": ["../shared/dist/*"]
     }
   },
   "include": ["src/**/*"],

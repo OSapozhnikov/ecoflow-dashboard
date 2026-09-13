@@ -118,7 +118,8 @@ describe('WebSocketClient', () => {
       websocketClient.connect();
 
       expect(mockWs).toBeDefined();
-      expect(mockWs?.url).toBe('ws://localhost:5000/ws');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      expect(mockWs?.url).toBe(`${protocol}//${window.location.host}/ws`);
     });
 
     it('should not connect if already connecting', () => {

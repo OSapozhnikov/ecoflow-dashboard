@@ -2,9 +2,10 @@
  * Unit tests for DeviceCard component
  */
 
+import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DeviceCard } from '../DeviceCard';
 import { useDeviceStatus } from '../../hooks/useDeviceStatus';
@@ -23,10 +24,10 @@ const createWrapper = () => {
     },
   });
 
-  return ({ children }: { children: React.ReactNode }) => (
-    <BrowserRouter>
+  return ({ children }: { children: ReactNode }) => (
+    <MemoryRouter>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </BrowserRouter>
+    </MemoryRouter>
   );
 };
 
@@ -158,6 +159,94 @@ describe('DeviceCard', () => {
 
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', '/device/ABC123');
+  });
+
+  it('should show battery and watts when status is ok', () => {
+    const device = {
+      sn: 'ABC123',
+      deviceName: 'Test Device',
+      online: 1,
+    };
+
+    vi.mocked(useDeviceStatus).mockReturnValue({
+      data: {
+        deviceId: 'ABC123',
+        data: {
+          deviceId: 'ABC123',
+          batteryLevel: 72,
+          chargeRate: 120,
+          dischargeRate: 0,
+          status: 'charging',
+          timestamp: Date.now(),
+        },
+        source: 'rest',
+        timestamp: Date.now(),
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      wsConnected: false,
+      usingMQTT: false,
+    } as ReturnType<typeof useDeviceStatus>);
+
+    render(<DeviceCard device={device} />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('72%')).toBeInTheDocument();
+    expect(screen.getByText(/In:\s*120\s*W/)).toBeInTheDocument();
+  });
+
+  it('should show unavailable when status query fails', () => {
+    const device = {
+      sn: 'ABC123',
+      deviceName: 'Test Device',
+      online: 1,
+    };
+
+    vi.mocked(useDeviceStatus).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('Failed to fetch device status'),
+      wsConnected: false,
+      usingMQTT: false,
+    } as ReturnType<typeof useDeviceStatus>);
+
+    render(<DeviceCard device={device} />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Failed to fetch device status')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
+  it('should not treat source=error as a real 0% SOC', () => {
+    const device = {
+      sn: 'ABC123',
+      deviceName: 'Test Device',
+      online: 1,
+    };
+
+    vi.mocked(useDeviceStatus).mockReturnValue({
+      data: {
+        deviceId: 'ABC123',
+        data: {
+          deviceId: 'ABC123',
+          batteryLevel: 0,
+          status: 'standby',
+          timestamp: Date.now(),
+        },
+        source: 'error',
+        timestamp: Date.now(),
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      wsConnected: false,
+      usingMQTT: false,
+    } as ReturnType<typeof useDeviceStatus>);
+
+    render(<DeviceCard device={device} />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Status unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 });
 

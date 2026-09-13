@@ -56,23 +56,27 @@ vi.mock('../utils/logger', () => ({
   },
 }));
 
-// Mock constants - need to mock shared first
-vi.mock('../../shared/src/constants', () => ({
-  API_CONFIG: {
-    TIMEOUT: 10000,
-  },
-  RECONNECT_CONFIG: {
-    MQTT: {
-      MAX_ATTEMPTS: 5,
-      DELAY: 1000,
+// Mock constants
+vi.mock('@ecoflow/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@ecoflow/shared')>();
+  return {
+    ...actual,
+    API_CONFIG: {
+      TIMEOUT: 10000,
     },
-  },
-  MQTT_CONFIG: {
-    CERTIFICATION_CACHE_HOURS: 23,
-    CONNECT_TIMEOUT: 30000,
-    KEEPALIVE: 60,
-  },
-}));
+    RECONNECT_CONFIG: {
+      MQTT: {
+        MAX_ATTEMPTS: 5,
+        DELAY: 1000,
+      },
+    },
+    MQTT_CONFIG: {
+      CERTIFICATION_CACHE_HOURS: 23,
+      CONNECT_TIMEOUT: 30000,
+      KEEPALIVE: 60,
+    },
+  };
+});
 
 vi.mock('../constants', () => ({
   API_CONFIG: {

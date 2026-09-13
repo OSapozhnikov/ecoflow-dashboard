@@ -4,12 +4,21 @@
   "description": "Shared types and constants for Ecoflow Delta 3 Monitor",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "require": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "type-check": "tsc --noEmit"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "devDependencies": {
     "typescript": "^5.9.3"

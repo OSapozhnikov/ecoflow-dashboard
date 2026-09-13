@@ -2,7 +2,6 @@
  * Server-side constants
  */
 
-// Use relative path for ts-node compatibility
 import {
   API_CONFIG,
   RECONNECT_CONFIG,
@@ -10,7 +9,7 @@ import {
   MQTT_CONFIG,
   RATE_LIMIT,
   HEALTH_CHECK,
-} from '../../shared/src/constants';
+} from '@ecoflow/shared';
 
 // Re-export shared constants
 export {
@@ -29,4 +28,3 @@ export const SERVER_CONFIG = {
   DEFAULT_PORT: 5000,
   GRACEFUL_SHUTDOWN_TIMEOUT: 10_000, // 10 seconds
 } as const;
-

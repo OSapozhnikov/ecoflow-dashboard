@@ -13,11 +13,13 @@ export const API_CONFIG = {
 
 /**
  * Refetch Intervals (in milliseconds)
+ * Tuned so a typical 2–3 device dashboard stays under the client RateLimiter
+ * (10 req / 60s) and does not hammer Ecoflow REST when MQTT/WebSocket is active.
  */
 export const REFETCH_INTERVALS = {
-  DEVICES: 10_000, // 10 seconds
-  DEVICE_STATUS: 5_000, // 5 seconds
-  DEVICE_STATUS_WS: 10_000, // 10 seconds when WebSocket connected
+  DEVICES: 60_000, // 60 seconds — device list changes infrequently
+  DEVICE_STATUS: 30_000, // 30 seconds — HTTP fallback when WebSocket unavailable
+  DEVICE_STATUS_WS: 60_000, // 60 seconds — light REST check while MQTT pushes live updates
 } as const;
 
 /**

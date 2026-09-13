@@ -1,13 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@shared': path.resolve(__dirname, '../shared/src'),
+      '@ecoflow/shared': path.resolve(__dirname, '../shared/src'),
     },
   },
   build: {
@@ -41,6 +42,18 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/ws': {
+        target: process.env.VITE_API_BASE_URL_DOCKER || process.env.VITE_API_BASE_URL || 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+      },
+      '/health': {
+        target: process.env.VITE_API_BASE_URL_DOCKER || process.env.VITE_API_BASE_URL || 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+      },
+      // Dev-only convenience (not exposed via nginx on port 80 in production)
       '/api-docs': {
         target: process.env.VITE_API_BASE_URL_DOCKER || process.env.VITE_API_BASE_URL || 'http://localhost:5000',
         changeOrigin: true,
@@ -51,12 +64,6 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      '/health': {
-        target: process.env.VITE_API_BASE_URL_DOCKER || process.env.VITE_API_BASE_URL || 'http://localhost:5000',
-        changeOrigin: true,
-        secure: false,
-      },
     },
   },
 });
-

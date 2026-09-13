@@ -1,244 +1,168 @@
 # Ecoflow Delta 3 Monitor
 
-Веб-додаток для моніторингу стану батарей пристроїв Ecoflow Delta 3 Max Plus та Delta 3 Plus у реальному часі.
+Web app for real-time battery monitoring of Ecoflow Delta 3 Max Plus and Delta 3 Plus.
 
-## Технології
+## Stack
 
-- **Backend**: Node.js 22 LTS, Express.js, TypeScript
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
-- **Containerization**: Docker, Docker Compose
-- **API**: Ecoflow Developer API
-- **Real-time**: MQTT + WebSocket (з fallback на REST API polling)
+- **Backend:** Node.js 22 LTS, Express 5, TypeScript, Zod 4, Winston, MQTT, WebSocket
+- **Frontend:** React 19.3, Vite 8, Tailwind 4 (`@tailwindcss/vite`), React Router 7, TanStack Query 5
+- **Shared:** `@ecoflow/shared` (npm workspaces)
+- **Deploy:** Docker Compose, Nginx (proxies `/api/`, `/ws`, `/health`)
 
-## Тестування
+Workspace installs often need: `npm install --legacy-peer-deps`
 
-Для запуску всіх тестів з генерацією coverage репортів використовуйте:
+## Quick start
 
-**Linux/Mac:**
-```bash
-./run-tests.sh
-```
+### Prerequisites
 
-**Windows (PowerShell):**
-```powershell
-.\run-tests.ps1
-```
+- Node.js 22.x LTS+
+- Docker / Docker Compose (optional)
+- Ecoflow Developer API keys ([developer portal](https://developer-eu.ecoflow.com))
 
-**Або через Docker Compose:**
-```bash
-docker-compose -f docker-compose.dev.yml --profile tests up --build tests
-```
+### Install
 
-Coverage репорти зберігаються в:
-- `server/coverage/index.html`
-- `client/coverage/index.html`
-
-## Швидкий старт
-
-### Передумови
-
-- Node.js 22.x LTS або новіша версія
-- Docker та Docker Compose
-- Ecoflow Developer API credentials
-
-### Встановлення
-
-1. Клонуйте репозиторій:
 ```bash
 git clone <repository-url>
-cd ecoflow-delta-3
-```
+cd ecoflow-dashboard
 
-2. Створіть `.env` файл в корені проекту:
-```bash
 cp .env.example .env
+# Set ECOFLOW_ACCESS_KEY, ECOFLOW_SECRET_KEY, ECOFLOW_API_BASE_URL
 ```
 
-3. Заповніть `.env` файл вашими Ecoflow API credentials:
+Root workspace install:
+
+```bash
+npm install --legacy-peer-deps
+```
+
+### Environment
+
+Required (see `.env.example`):
+
 ```env
-# Required
 ECOFLOW_ACCESS_KEY=your_access_key
 ECOFLOW_SECRET_KEY=your_secret_key
-ECOFLOW_API_BASE_URL=https://api-eu.ecoflow.com
+ECOFLOW_API_BASE_URL=https://api-e.ecoflow.com
 PORT=5000
 NODE_ENV=development
 CORS_ORIGIN=http://localhost:3000
-
-# Optional: MQTT for real-time updates
-ECOFLOW_MQTT_ENABLED=false
-ECOFLOW_MQTT_BROKER_URL=mqtt://mqtt.ecoflow.com:1883
 ```
 
-Див. `.env.example` для повного списку опцій.
+Optional real-time:
 
-### Development режим
-
-#### З Docker (рекомендовано)
-
-```bash
-# Запуск всього стеку
-docker-compose -f docker-compose.dev.yml up
-
-# Тільки backend
-docker-compose -f docker-compose.dev.yml up server
-
-# Тільки frontend
-docker-compose -f docker-compose.dev.yml up client
+```env
+ECOFLOW_MQTT_ENABLED=true
+# MQTT credentials come from GET /iot-open/sign/certification (HMAC auth)
+WEBSOCKET_ENABLED=true
+WEBSOCKET_PATH=/ws
 ```
 
-#### Без Docker (локально)
+Frontend API base:
 
-**Backend:**
+- **Default:** same-origin (empty) — use with Vite proxy or Nginx
+- **Override:** `VITE_API_BASE_URL=http://localhost:5000` when the API is on another origin
+
+### Development
+
+**Docker (recommended):**
+
 ```bash
-cd server
-npm install
-npm run dev
+docker-compose -f docker-compose.dev.yml up --build
 ```
 
-**Frontend:**
+- API: http://localhost:5000  
+- UI: http://localhost:3000  
+
+**Local (without Docker):**
+
 ```bash
-cd client
-npm install
-npm run dev
+# from repo root
+npm run type-check   # builds shared, then type-checks server + client
+
+npm run dev --workspace=server
+npm run dev --workspace=client
 ```
 
-### Production режим
+Vite proxies `/api`, `/ws`, and `/health` to the backend in development.
+
+### Production
 
 ```bash
-# Білд образів
 docker-compose build
-
-# Запуск
 docker-compose up -d
-
-# Перегляд логів
-docker-compose logs -f
-
-# Зупинка
-docker-compose down
 ```
 
-## API Endpoints
+- UI + proxied API/WS: http://localhost (port 80)  
+- Express directly (metrics / Swagger): http://localhost:5000  
 
-### Backend API (порт 5000)
+Nginx on `:80` proxies `/api/`, `/ws`, and `/health` to the server. It does **not** expose `/metrics` or `/api-docs` on port 80.
 
-- `GET /health` - Health check
-- `GET /api/devices` - Список пристроїв
-- `GET /api/devices/:deviceId/status` - Статус пристрою (гібридний: MQTT + REST fallback)
-- `GET /api/devices/connection-status` - Статус MQTT/REST з'єднання
-- `WS /ws` - WebSocket для real-time оновлень
-- `GET /api-docs` - Swagger UI документація API
-- `GET /metrics` - Prometheus metrics endpoint
+## API surface
 
-### Real-time Updates
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Liveness |
+| `GET /ready` | Readiness (MQTT + data success when enabled) |
+| `GET /api/devices` | Device list |
+| `GET /api/devices/:deviceId/status` | Status (MQTT preferred, REST fallback); **502** `{ error: { code: 'STATUS_FETCH_ERROR' } }` if both fail — no fake 0% SOC |
+| `GET /api/devices/connection-status` | MQTT / WebSocket connection info |
+| `WS /ws` | Real-time status updates |
+| `GET /api-docs` | Swagger UI (port 5000) |
+| `GET /metrics` | Prometheus metrics (port 5000) |
 
-Проект підтримує гібридний підхід:
-- **MQTT** - для real-time статусу пристроїв (якщо доступний)
-- **WebSocket** - для передачі оновлень на frontend
-- **REST API** - fallback якщо MQTT недоступний
-- **HTTP Polling** - fallback якщо WebSocket недоступний
+Auth to Ecoflow: **HMAC-SHA256 + ACCESS_KEY / SECRET_KEY** (not OAuth2).
 
-Детальна документація про реалізацію real-time оновлень доступна в `ARCHITECTURE.md`
-
-## Структура проекту
+## Project layout
 
 ```
-ecoflow-delta-3/
-├── server/          # Backend (Node.js/Express)
-├── client/          # Frontend (React/Vite)
-├── shared/          # Shared types and constants
-├── docs/            # Документація Ecoflow (PDF файли)
+ecoflow-dashboard/
+├── server/                 # Express API
+├── client/                 # React + Vite SPA
+├── shared/                 # @ecoflow/shared
+├── docs/                   # Ecoflow PDF references
 ├── docker-compose.yml
 ├── docker-compose.dev.yml
-├── Dockerfile.tests
+├── .env.example
 ├── ARCHITECTURE.md
-├── README.md
-├── run-tests.sh
-├── run-tests.ps1
-└── .env
+└── README.md
 ```
 
-## API Документація
+## Testing
 
-Після запуску сервера, Swagger UI документація доступна за адресою:
-- **Development**: http://localhost:5000/api-docs
-- **Production**: https://your-domain.com/api-docs
+From repo root:
 
-Документація включає:
-- Опис всіх API endpoints
-- Схеми запитів та відповідей
-- Приклади використання
-- Інтерактивне тестування API
-
-## Документація
-
-Детальна документація доступна в:
-- `ARCHITECTURE.md` - Архітектура проекту (включає MQTT, WebSocket, аутентифікацію, логування, DI, Docker, та best practices)
-
-## Архітектурні особливості
-
-- **Shared Package**: Спільні типи та константи між frontend та backend
-- **Dependency Injection**: Factory pattern для легшого тестування
-- **Structured Logging**: Winston для структурованого логування
-- **Constants**: Всі magic numbers винесені в константи
-
-## Тестування
-
-### Запуск тестів з Docker Compose (рекомендовано)
-
-Для запуску всіх тестів з генерацією coverage репортів:
-
-**Linux/Mac:**
 ```bash
-./run-tests.sh
+npm run type-check
+npm test                  # server vitest + client vitest run
 ```
 
-**Windows (PowerShell):**
-```powershell
-.\run-tests.ps1
-```
+Or per package:
 
-**Або напряму:**
 ```bash
+npm run test --workspace=server
+npm run test:run --workspace=client
+```
+
+Coverage / Docker test profile:
+
+```bash
+./run-tests.sh            # Linux/Mac
+.\run-tests.ps1           # Windows
+# or
 docker-compose -f docker-compose.dev.yml --profile tests up --build tests
 ```
 
-Coverage репорти зберігаються в:
-- `server/coverage/index.html`
-- `client/coverage/index.html`
-
-### Локальний запуск тестів
+MQTT smoke script:
 
 ```bash
-# Frontend тести
-cd client && npm run test
-
-# Backend тести
-cd server && npm run test
-
-# Тести з coverage
-cd server && npm run test:coverage
-cd client && npm run test:coverage
+npm run test-mqtt --workspace=server
 ```
 
-Детальніше про тестування див. розділ "Тестування" вище.
+## Docs
 
-## Тестування MQTT
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — auth, MQTT cert flow, Nginx proxy, ops, shared package
+- Swagger: http://localhost:5000/api-docs (when server is running)
 
-Для тестування MQTT підключення:
-
-```bash
-cd server
-npm install
-npm run test-mqtt
-```
-
-Це допоможе:
-- Перевірити підключення до MQTT брокера
-- Визначити правильну структуру topics
-- Побачити формат повідомлень від Ecoflow
-
-## Ліцензія
+## License
 
 MIT
-

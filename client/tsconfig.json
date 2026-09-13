@@ -20,10 +20,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["../shared/src/*"]
+      "@ecoflow/shared": ["../shared/src/index.ts"],
+      "@ecoflow/shared/*": ["../shared/src/*"]
     }
   },
   "include": ["src"],
+  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
 

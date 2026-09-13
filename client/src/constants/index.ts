@@ -2,12 +2,11 @@
  * Client-side constants
  */
 
-// Use relative path for better compatibility
 import {
   REFETCH_INTERVALS,
   WEBSOCKET_CONFIG,
   BATTERY_CONFIG,
-} from '../../shared/src/constants';
+} from '@ecoflow/shared';
 
 // Re-export shared constants
 export {
@@ -20,7 +19,8 @@ export {
  * Client-specific constants
  */
 export const CLIENT_CONFIG = {
-  DEFAULT_API_URL: 'http://localhost:5000',
+  /** Empty = same-origin; override via VITE_API_BASE_URL */
+  DEFAULT_API_URL: '',
   REQUEST_TIMEOUT: 10_000, // 10 seconds
 } as const;
 
@@ -37,4 +37,3 @@ export const RATE_LIMIT_CONFIG = {
   // Throttle delay for API calls (milliseconds)
   THROTTLE_DELAY: 1000,
 } as const;
-

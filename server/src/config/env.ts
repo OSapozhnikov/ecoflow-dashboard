@@ -1,28 +1,35 @@
 /**
- * Environment variables validation and configuration
+ * Environment variables validation and configuration (Zod)
  */
 
-const requiredEnvVars = [
-  'ECOFLOW_ACCESS_KEY',
-  'ECOFLOW_SECRET_KEY',
-  'ECOFLOW_API_BASE_URL',
-  'PORT'
-];
+import { z } from 'zod';
 
-export function validateEnv(): void {
-  const missing = requiredEnvVars.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing required environment variables: ${missing.join(', ')}\n` +
-      'Please check your .env file or environment configuration.'
-    );
-  }
-}
+const envSchema = z.object({
+  PORT: z
+    .string()
+    .regex(/^\d+$/, 'PORT must be a number')
+    .default('5000'),
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  ECOFLOW_ACCESS_KEY: z.string().min(1, 'ECOFLOW_ACCESS_KEY is required'),
+  ECOFLOW_SECRET_KEY: z.string().min(1, 'ECOFLOW_SECRET_KEY is required'),
+  ECOFLOW_API_BASE_URL: z.string().url('ECOFLOW_API_BASE_URL must be a valid URL'),
+  ECOFLOW_MQTT_ENABLED: z.enum(['true', 'false']).optional(),
+  ECOFLOW_MQTT_BROKER_URL: z.string().optional(),
+  ECOFLOW_MQTT_AUTH_TYPE: z.enum(['access_key', 'email', 'api']).optional(),
+  ECOFLOW_MQTT_USERNAME: z.string().optional(),
+  ECOFLOW_MQTT_PASSWORD: z.string().optional(),
+  ECOFLOW_MQTT_EMAIL: z.string().optional(),
+  ECOFLOW_MQTT_CLIENT_ID: z.string().optional(),
+  CORS_ORIGIN: z.string().optional(),
+  WEBSOCKET_ENABLED: z.enum(['true', 'false']).optional(),
+  WEBSOCKET_PATH: z.string().optional(),
+});
+
+export type Env = z.infer<typeof envSchema>;
 
 export interface Config {
   port: number;
-  nodeEnv: string;
+  nodeEnv: Env['NODE_ENV'];
   ecoflow: {
     accessKey: string;
     secretKey: string;
@@ -30,7 +37,7 @@ export interface Config {
     mqtt?: {
       brokerUrl: string;
       enabled: boolean;
-      authType?: 'access_key' | 'email';
+      authType?: 'access_key' | 'email' | 'api';
       username?: string;
       password?: string;
       email?: string;
@@ -46,38 +53,64 @@ export interface Config {
   };
 }
 
-export function getConfig(): Config {
-  validateEnv();
+let cachedConfig: Config | null = null;
 
-  const mqttEnabled = process.env.ECOFLOW_MQTT_ENABLED === 'true';
-  const mqttBrokerUrl = process.env.ECOFLOW_MQTT_BROKER_URL || 'mqtt://mqtt.ecoflow.com:1883';
-
-  return {
-    port: parseInt(process.env.PORT || '5000', 10),
-    nodeEnv: process.env.NODE_ENV || 'development',
-    ecoflow: {
-      accessKey: process.env.ECOFLOW_ACCESS_KEY!,
-      secretKey: process.env.ECOFLOW_SECRET_KEY!,
-      apiBaseUrl: process.env.ECOFLOW_API_BASE_URL!,
-      mqtt: mqttEnabled ? {
-        brokerUrl: mqttBrokerUrl, // This is now a fallback, actual URL comes from API
-        enabled: true,
-        // Note: MQTT credentials are now obtained via API endpoint /iot-open/sign/certification
-        // The following fields are kept for backward compatibility but may not be used
-        authType: (process.env.ECOFLOW_MQTT_AUTH_TYPE as 'access_key' | 'email') || 'api', // 'api' means use certification endpoint
-        username: process.env.ECOFLOW_MQTT_USERNAME, // Not used when authType='api'
-        password: process.env.ECOFLOW_MQTT_PASSWORD, // Not used when authType='api'
-        email: process.env.ECOFLOW_MQTT_EMAIL, // Not used when authType='api'
-        clientId: process.env.ECOFLOW_MQTT_CLIENT_ID || `ecoflow-monitor-${Date.now()}`,
-      } : undefined,
-    },
-    cors: {
-      origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    },
-    websocket: {
-      enabled: process.env.WEBSOCKET_ENABLED !== 'false',
-      path: process.env.WEBSOCKET_PATH || '/ws',
-    },
-  };
+export function validateEnv(): Env {
+  const result = envSchema.safeParse(process.env);
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => `${issue.path.join('.') || 'env'}: ${issue.message}`)
+      .join('\n');
+    throw new Error(
+      `Invalid environment configuration:\n${details}\n` +
+        'Please check your .env file or environment configuration.'
+    );
+  }
+  return result.data;
 }
 
+export function getConfig(): Config {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  const env = validateEnv();
+  const mqttEnabled = env.ECOFLOW_MQTT_ENABLED === 'true';
+  const mqttBrokerUrl = env.ECOFLOW_MQTT_BROKER_URL || 'mqtt://mqtt.ecoflow.com:1883';
+
+  cachedConfig = {
+    port: parseInt(env.PORT, 10),
+    nodeEnv: env.NODE_ENV,
+    ecoflow: {
+      accessKey: env.ECOFLOW_ACCESS_KEY,
+      secretKey: env.ECOFLOW_SECRET_KEY,
+      apiBaseUrl: env.ECOFLOW_API_BASE_URL,
+      mqtt: mqttEnabled
+        ? {
+            brokerUrl: mqttBrokerUrl,
+            enabled: true,
+            // MQTT credentials come from /iot-open/sign/certification when authType is api
+            authType: env.ECOFLOW_MQTT_AUTH_TYPE || 'api',
+            username: env.ECOFLOW_MQTT_USERNAME,
+            password: env.ECOFLOW_MQTT_PASSWORD,
+            email: env.ECOFLOW_MQTT_EMAIL,
+            clientId: env.ECOFLOW_MQTT_CLIENT_ID || `ecoflow-monitor-${Date.now()}`,
+          }
+        : undefined,
+    },
+    cors: {
+      origin: env.CORS_ORIGIN || 'http://localhost:3000',
+    },
+    websocket: {
+      enabled: env.WEBSOCKET_ENABLED !== 'false',
+      path: env.WEBSOCKET_PATH || '/ws',
+    },
+  };
+
+  return cachedConfig;
+}
+
+/** Reset cached config (tests only) */
+export function resetConfigCache(): void {
+  cachedConfig = null;
+}
