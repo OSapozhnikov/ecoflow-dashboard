@@ -289,10 +289,28 @@ describe('mapQuotaData', () => {
     expect(toDeviceStatusFields(result).plugWatts).toBe(213);
   });
 
-  it('forcePlug falls back to consWatt (already W) when plug watts missing', () => {
-    const result = mapQuotaData({ lanState: 1 }, { forcePlug: true, consWatt: -42 });
-    expect(result.plug!.watts).toBe(42);
+  it('forcePlug maps raw watts 11360 → 1136 W (0.1 W units /10 once)', () => {
+    const result = mapQuotaData({ watts: 11360 }, { forcePlug: true });
+    expect(result.plug!.watts).toBe(1136);
+    expect(result.matched.plugWatts).toBe('watts');
+    expect(toDeviceStatusFields(result).plugWatts).toBe(1136);
+  });
+
+  it('forcePlug falls back to consWatt /10 (0.1 W) when plug watts missing', () => {
+    // HW52 spike: consWatt-only quota without /10 showed ~11230 W; correct is ~1123 W
+    const result = mapQuotaData(
+      { lanState: 1, consWatt: 11230 },
+      { forcePlug: true, consWatt: 11230 }
+    );
+    expect(result.plug!.watts).toBe(1123);
     expect(result.matched.plugWatts).toBe('consWatt');
+    expect(toDeviceStatusFields(result).plugWatts).toBe(1123);
+  });
+
+  it('forcePlug consWatt fallback does not display raw 11230 as watts', () => {
+    const result = mapQuotaData({ dstTime: 0 }, { forcePlug: true, consWatt: -11230 });
+    expect(result.plug!.watts).toBe(1123);
+    expect(result.plug!.watts).not.toBe(11230);
   });
 
   it('forcePlug falls back to outputWatts (0.1 W) when plug keys missing', () => {

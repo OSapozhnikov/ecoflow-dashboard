@@ -1,6 +1,6 @@
-# Ecoflow Delta 3 Monitor
+# Ecoflow Monitor
 
-Web app for real-time battery monitoring of Ecoflow Delta 3 Max Plus and Delta 3 Plus.
+Web app for real-time monitoring of Ecoflow devices (Delta 3 Max Plus, Delta 3 Plus, Smart Plug, and related SKUs).
 
 **Supported SKUs:** Delta 3 Max Plus and Delta 3 Plus are first-class. Vendor PDF documentation exists for Max / Max Plus only; Delta 3 Plus uses the same heartbeat/quota field family (`cmsBattSoc`, `powInSumW` / `powOutSumW`, etc.) until a live dump shows otherwise.
 

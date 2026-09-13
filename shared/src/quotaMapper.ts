@@ -131,8 +131,10 @@ export const PLUG_TEMP_KEYS: readonly string[] = ['2_1.temp', 'temp'] as const;
 
 export interface MapQuotaOptions {
   /**
-   * MQTT `consWatt`: positive = charge, negative = discharge (already in W).
-   * Takes priority over watt field lookup when non-zero.
+   * MQTT `consWatt`: positive = charge, negative = discharge.
+   * Station path: already whole W. Smart Plug fallback: 0.1 W units (same as
+   * `watts` / `2_1.watts`) — mapQuotaData applies /10 for plugs only.
+   * Takes priority over watt field lookup when non-zero (stations).
    */
   consWatt?: number;
   /**
@@ -419,7 +421,10 @@ export function mapQuotaData(
         plugWatts = Math.max(0, round1(optsWatts / 10));
         matched.plugWatts = 'options.watts';
       } else if (typeof consWatt === 'number' && consWatt !== 0) {
-        plugWatts = Math.max(0, round1(Math.abs(consWatt)));
+        // Plug MQTT consWatt uses the same 0.1 W units as `watts` (unlike
+        // station consWatt, which is already whole W). Without /10 the UI
+        // spikes ~10× (e.g. raw 11230 → false 11230 W instead of 1123 W).
+        plugWatts = Math.max(0, round1(Math.abs(consWatt) / 10));
         matched.plugWatts = 'consWatt';
       } else {
         for (const field of OUTPUT_WATT_FIELDS) {

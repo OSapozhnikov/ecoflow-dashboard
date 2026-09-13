@@ -1,5 +1,5 @@
 /**
- * Shared constants for Ecoflow Delta 3 Monitor
+ * Shared constants for Ecoflow Monitor
  */
 
 /**

@@ -11,9 +11,9 @@ const options: swaggerJsdoc.Options = {
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'Ecoflow Delta 3 Monitor API',
+      title: 'Ecoflow Monitor API',
       version: '1.0.0',
-      description: 'API для моніторингу стану батарей пристроїв Ecoflow Delta 3 Max Plus та Delta 3 Plus у реальному часі.',
+      description: 'API для моніторингу пристроїв Ecoflow (Delta 3 Max Plus, Delta 3 Plus, Smart Plug та інші) у реальному часі.',
       contact: {
         name: 'API Support',
       },

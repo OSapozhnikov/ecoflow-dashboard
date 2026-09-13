@@ -1,7 +1,7 @@
 {
   "name": "ecoflow-delta-3-client",
   "version": "1.0.0",
-  "description": "Ecoflow Delta 3 Monitor Frontend",
+  "description": "Ecoflow Monitor Frontend",
   "type": "module",
   "scripts": {
     "dev": "vite",

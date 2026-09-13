@@ -17,7 +17,6 @@
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@ecoflow/shared": ["../shared/src/index.ts"],
@@ -28,4 +27,3 @@
   "exclude": ["src/**/__tests__/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
-

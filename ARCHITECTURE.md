@@ -1,6 +1,6 @@
-# Architecture — Ecoflow Delta 3 Monitor
+# Architecture — Ecoflow Monitor
 
-Real-time battery monitoring for Ecoflow Delta 3 Max Plus and Delta 3 Plus.
+Real-time monitoring for Ecoflow devices (Delta 3 Max Plus, Delta 3 Plus, Smart Plug, and related SKUs).
 
 **Supported SKUs:** Delta 3 Max Plus and Delta 3 Plus are supported. Vendor PDF coverage exists for Max / Max Plus only; Plus shares the same heartbeat/quota family as Max / Max Plus (`cmsBattSoc`, `powInSumW` / `powOutSumW`, `cmsChgDsgState`) until a live quota dump proves otherwise.
 

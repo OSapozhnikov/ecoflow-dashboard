@@ -157,7 +157,7 @@ export function createApp(): Express {
   // Swagger API documentation
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: 'Ecoflow Delta 3 Monitor API Documentation',
+    customSiteTitle: 'Ecoflow Monitor API Documentation',
     swaggerOptions: {
       persistAuthorization: true,
       tryItOutEnabled: true,

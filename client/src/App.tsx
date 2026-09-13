@@ -34,7 +34,7 @@ function App() {
               <header className="bg-white dark:bg-gray-800 shadow-sm">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                   <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                    Ecoflow Delta 3 Monitor
+                    Ecoflow Monitor
                   </h1>
                   <ThemeToggle />
                 </div>
