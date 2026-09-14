@@ -1,0 +1,26 @@
+{
+  "id": "delta3-max-plus",
+  "match": {
+    "snPrefixes": ["D3M1"],
+    "productSubstrings": ["delta 3 max plus", "delta3 max plus"]
+  },
+  "capabilities": {
+    "battery": true,
+    "plug": false,
+    "remainingTime": true
+  },
+  "fields": [
+    { "path": "cmsBattSoc", "target": "soc" },
+    { "path": "cms_batt_soc", "target": "soc" },
+    { "path": "powInSumW", "target": "charge" },
+    { "path": "pow_in_sum_w", "target": "charge" },
+    { "path": "powOutSumW", "target": "discharge" },
+    { "path": "pow_out_sum_w", "target": "discharge" },
+    { "path": "cmsChgDsgState", "target": "chgDsgState" },
+    { "path": "cms_chg_dsg_state", "target": "chgDsgState" },
+    { "path": "cmsChgRemTime", "target": "remainingCharge" },
+    { "path": "cms_chg_rem_time", "target": "remainingCharge" },
+    { "path": "cmsDsgRemTime", "target": "remainingDischarge" },
+    { "path": "cms_dsg_rem_time", "target": "remainingDischarge" }
+  ]
+}

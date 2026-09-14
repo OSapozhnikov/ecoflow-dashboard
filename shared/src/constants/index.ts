@@ -63,11 +63,39 @@ export const BATTERY_CONFIG = {
 } as const;
 
 /**
+ * Live status freshness — MQTT badge is green only within this window.
+ */
+export const STATUS_FRESHNESS_MS = {
+  MQTT_LIVE: 60_000,
+} as const;
+
+/**
+ * Smart Plug power — Ecoflow documents watts in 0.1 W units.
+ * Values above this after /10 are treated as anomalous (bad scale or overload).
+ */
+export const PLUG_POWER_CONFIG = {
+  TENTH_WATT_DIVISOR: 10,
+  /** ~16A × 250V household ceiling */
+  ANOMALY_WATTS: 4_000,
+} as const;
+
+/**
+ * History / retention defaults (server may override via settings.json)
+ */
+export const HISTORY_CONFIG = {
+  SNAPSHOT_INTERVAL_MS: 60_000,
+  RAW_RETENTION_DAYS: 30,
+  AGGREGATE_RETENTION_MONTHS: 13,
+} as const;
+
+/**
  * Rate Limiting
+ * Server Express /api default ceiling (overridable via RATE_LIMIT_MAX).
+ * Private IPs are skipped by default — see server middleware/rateLimit.ts.
  */
 export const RATE_LIMIT = {
   WINDOW_MS: 15 * 60 * 1000, // 15 minutes
-  MAX_REQUESTS: 100, // 100 requests per window
+  MAX_REQUESTS: 2000, // polling dashboard + Docker/nginx share one hop IP
 } as const;
 
 /**

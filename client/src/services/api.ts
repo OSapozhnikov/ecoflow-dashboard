@@ -188,6 +188,44 @@ class ApiClient {
       this.handleError(error);
     }
   }
+
+  /**
+   * Generic GET (settings, history, diagnostics, locations).
+   */
+  async get<T>(path: string): Promise<T> {
+    try {
+      const response = await this.client.get<T>(path);
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  /**
+   * Generic PUT JSON body.
+   */
+  async put<T>(path: string, body: unknown): Promise<T> {
+    try {
+      const response = await this.client.put<T>(path, body);
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  /**
+   * Generic POST JSON body.
+   */
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    try {
+      const response = await this.client.post<T>(path, body);
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
 }
 
 export const apiClient = new ApiClient();
+/** Alias used by newer pages */
+export const api = apiClient;

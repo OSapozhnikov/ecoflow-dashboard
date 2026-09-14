@@ -44,10 +44,16 @@ export interface BaseDeviceStatus {
   switchSta?: boolean;
   /** Smart Plug power in watts (already converted from 0.1 W) */
   plugWatts?: number;
+  /** True when plugWatts exceeds sane household max after unit conversion */
+  plugWattsAnomalous?: boolean;
   /** Smart Plug voltage (V) */
   volt?: number;
   /** Smart Plug temperature */
   temp?: number;
+  /** Minutes until full (Delta 3 cmsChgRemTime); omit when unknown */
+  remainingChargeMin?: number;
+  /** Minutes until empty (Delta 3 cmsDsgRemTime); omit when unknown */
+  remainingDischargeMin?: number;
   [key: string]: unknown; // For additional fields from API
 }
 

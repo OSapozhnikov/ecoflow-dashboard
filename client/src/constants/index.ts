@@ -28,8 +28,8 @@ export const CLIENT_CONFIG = {
  * Rate limiting configuration
  */
 export const RATE_LIMIT_CONFIG = {
-  // Maximum number of requests per window
-  MAX_REQUESTS: 10,
+  // Maximum number of requests per window (client-side guard for Ecoflow-bound calls)
+  MAX_REQUESTS: 30,
   // Time window in milliseconds (1 minute)
   WINDOW_MS: 60_000,
   // Debounce delay for API calls (milliseconds)

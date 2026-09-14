@@ -1,24 +1,62 @@
 /**
- * Device Detail Page
+ * Device Detail Page — status, diagnostics, history charts
  */
 
 import { useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
-import { deviceFamilyLabel, isSmartPlugFamily, resolveDeviceFamily } from '@ecoflow/shared';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  deviceFamilyLabel,
+  isSmartPlugFamily,
+  PLUG_POWER_CONFIG,
+  resolveDeviceFamily,
+} from '@ecoflow/shared';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { BatteryIndicator } from '../components/BatteryIndicator';
 import { ChargeRate } from '../components/ChargeRate';
 import { StatusBadge } from '../components/StatusBadge';
+import { SourceBadge } from '../components/SourceBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorMessage } from '../components/ErrorMessage';
+import { DeviceHistoryChart } from '../components/DeviceHistoryChart';
 import { formatDeviceStatusError } from '../utils/formatDeviceStatusError';
+import { formatRemainingMinutes } from '../utils/formatRemainingTime';
+import { api } from '../services/api';
 import type { Device, DeviceListResponse } from '../types/ecoflow';
+
+interface DiagnosticsPayload {
+  deviceId: string;
+  inDeviceList: boolean;
+  online?: boolean;
+  productName?: string;
+  deviceType?: string;
+  family?: string;
+  mqtt: {
+    enabled: boolean;
+    connected: boolean;
+    subscribed: boolean;
+    lastMqttTimestamp: number | null;
+    hasCachedStatus: boolean;
+  };
+  status: {
+    source?: string;
+    timestamp?: number;
+    lastRestCode?: string | number | null;
+    lastError?: string | null;
+  };
+}
 
 export function DeviceDetail() {
   const { deviceId } = useParams<{ deviceId: string }>();
   const queryClient = useQueryClient();
   const { data, isLoading, error, isError } = useDeviceStatus(deviceId || '', !!deviceId);
+
+  const { data: diagnostics } = useQuery({
+    queryKey: ['diagnostics', deviceId],
+    queryFn: () => api.get<DiagnosticsPayload>(`/api/devices/${deviceId}/diagnostics`),
+    enabled: !!deviceId,
+    refetchInterval: 60_000,
+  });
 
   const listDevice = useMemo((): Device | undefined => {
     if (!deviceId) return undefined;
@@ -69,6 +107,20 @@ export function DeviceDetail() {
     return formatDeviceStatusError(error?.message || fallback);
   }, [isPlug, error, data]);
 
+  const remainingLabel = useMemo(() => {
+    if (!data?.data || isPlug) return null;
+    const { status, remainingChargeMin, remainingDischargeMin } = data.data;
+    if (status === 'charging') {
+      const t = formatRemainingMinutes(remainingChargeMin);
+      return t ? `Full in ${t}` : null;
+    }
+    if (status === 'discharging') {
+      const t = formatRemainingMinutes(remainingDischargeMin);
+      return t ? `Empty in ${t}` : null;
+    }
+    return null;
+  }, [data, isPlug]);
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-8">
       <div className="max-w-4xl mx-auto">
@@ -82,9 +134,12 @@ export function DeviceDetail() {
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-            {deviceName}
-          </h1>
+          <div className="flex flex-wrap items-start justify-between gap-4 mb-2">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              {deviceName}
+            </h1>
+            <SourceBadge source={data?.source} timestamp={data?.timestamp} />
+          </div>
           {deviceId && (
             <p className="text-sm font-mono text-gray-500 dark:text-gray-400 mt-1">
               {deviceId}
@@ -124,18 +179,12 @@ export function DeviceDetail() {
                 )}
                 {(() => {
                   const plugWatts = data.data.plugWatts;
-                  const dischargeRate = data.data.dischargeRate;
-                  const chargeRate = data.data.chargeRate;
-                  const displayWatts =
-                    typeof plugWatts === 'number'
-                      ? plugWatts
-                      : typeof dischargeRate === 'number' && dischargeRate > 0
-                        ? dischargeRate
-                        : typeof chargeRate === 'number' && chargeRate > 0
-                          ? chargeRate
-                          : undefined;
+                  const anomalous =
+                    Boolean(data.data.plugWattsAnomalous) ||
+                    (typeof plugWatts === 'number' &&
+                      plugWatts > PLUG_POWER_CONFIG.ANOMALY_WATTS);
                   const hasSwitch = typeof data.data.switchSta === 'boolean';
-                  if (!hasSwitch && typeof displayWatts !== 'number') {
+                  if (!hasSwitch && typeof plugWatts !== 'number') {
                     return (
                       <p className="text-gray-500 dark:text-gray-400">Power unavailable</p>
                     );
@@ -150,10 +199,11 @@ export function DeviceDetail() {
                           </span>
                         </p>
                       )}
-                      {typeof displayWatts === 'number' && (
-                        <p>
+                      {typeof plugWatts === 'number' && (
+                        <p className={anomalous ? 'text-amber-700 dark:text-amber-300' : ''}>
                           Power:{' '}
-                          <span className="font-medium">{displayWatts} W</span>
+                          <span className="font-medium">{plugWatts} W</span>
+                          {anomalous ? ' (anomaly — check scale)' : ''}
                         </p>
                       )}
                       {typeof data.data.volt === 'number' && (
@@ -182,6 +232,9 @@ export function DeviceDetail() {
                   Battery Level
                 </h2>
                 <BatteryIndicator level={data.data.batteryLevel} size="lg" />
+                {remainingLabel && (
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{remainingLabel}</p>
+                )}
               </div>
 
               <div>
@@ -205,6 +258,43 @@ export function DeviceDetail() {
                   </h2>
                   <ChargeRate rate={data.data.dischargeRate} />
                 </div>
+              )}
+            </div>
+          )}
+
+          {deviceId && (
+            <div className="mt-10 space-y-8">
+              <DeviceHistoryChart deviceId={deviceId} isPlug={isPlug} />
+
+              {diagnostics && (
+                <section>
+                  <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                    Diagnostics
+                  </h2>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-gray-700 dark:text-gray-300 font-mono">
+                    <div>In device list: {String(diagnostics.inDeviceList)}</div>
+                    <div>Online (list): {String(diagnostics.online ?? '—')}</div>
+                    <div>Family: {diagnostics.family ?? '—'}</div>
+                    <div>MQTT enabled: {String(diagnostics.mqtt.enabled)}</div>
+                    <div>MQTT connected: {String(diagnostics.mqtt.connected)}</div>
+                    <div>MQTT subscribed: {String(diagnostics.mqtt.subscribed)}</div>
+                    <div>
+                      Last MQTT:{' '}
+                      {diagnostics.mqtt.lastMqttTimestamp
+                        ? new Date(diagnostics.mqtt.lastMqttTimestamp).toISOString()
+                        : '—'}
+                    </div>
+                    <div>Cached status: {String(diagnostics.mqtt.hasCachedStatus)}</div>
+                    <div>Status source: {diagnostics.status.source ?? '—'}</div>
+                    <div>Last REST/error: {diagnostics.status.lastError ?? diagnostics.status.lastRestCode ?? '—'}</div>
+                  </dl>
+                  {diagnostics.status.lastError && (
+                    <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">
+                      If vendor code 8521 persists while the official app works, check Open API
+                      entitlement / region for this SN (see docs/TAU_8521_SPIKE.md).
+                    </p>
+                  )}
+                </section>
               )}
             </div>
           )}

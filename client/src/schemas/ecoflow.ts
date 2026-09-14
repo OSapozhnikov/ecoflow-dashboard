@@ -45,8 +45,11 @@ export const DeviceStatusSchema = z.object({
   isPlug: z.boolean().optional(),
   switchSta: z.boolean().optional(),
   plugWatts: z.number().min(0).optional(),
+  plugWattsAnomalous: z.boolean().optional(),
   volt: z.number().optional(),
   temp: z.number().optional(),
+  remainingChargeMin: z.number().min(0).optional(),
+  remainingDischargeMin: z.number().min(0).optional(),
 }).passthrough();
 
 /**

@@ -4,10 +4,17 @@
 
 import { memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { deviceFamilyLabel, isSmartPlugFamily, resolveDeviceFamily } from '@ecoflow/shared';
+import {
+  deviceFamilyLabel,
+  isSmartPlugFamily,
+  PLUG_POWER_CONFIG,
+  resolveDeviceFamily,
+} from '@ecoflow/shared';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { BatteryIndicator } from './BatteryIndicator';
+import { SourceBadge } from './SourceBadge';
 import { formatDeviceStatusError } from '../utils/formatDeviceStatusError';
+import { formatRemainingMinutes } from '../utils/formatRemainingTime';
 import type { Device } from '../types/ecoflow';
 
 interface DeviceCardProps {
@@ -75,18 +82,6 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
     return true;
   }, [statusData, isError]);
 
-  const isMQTTActive = useMemo(() => {
-    if (!statusOk || !statusData) return false;
-
-    const source = statusData.source;
-    const timestamp = statusData.timestamp;
-
-    if (source !== 'mqtt' || !timestamp) return false;
-
-    const oneMinuteAgo = Date.now() - 60 * 1000;
-    return timestamp >= oneMinuteAgo;
-  }, [statusData, statusOk]);
-
   const netWatts = useMemo(() => {
     if (!statusOk || !statusData?.data) return null;
     const { chargeRate, dischargeRate } = statusData.data;
@@ -100,25 +95,35 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
     return null;
   }, [statusData, statusOk]);
 
+  const remainingLabel = useMemo(() => {
+    if (!statusOk || !statusData?.data || isPlug) return null;
+    const { status, remainingChargeMin, remainingDischargeMin } = statusData.data;
+    if (status === 'charging') {
+      const t = formatRemainingMinutes(remainingChargeMin);
+      return t ? `Full in ${t}` : null;
+    }
+    if (status === 'discharging') {
+      const t = formatRemainingMinutes(remainingDischargeMin);
+      return t ? `Empty in ${t}` : null;
+    }
+    return null;
+  }, [statusData, statusOk, isPlug]);
+
   const plugPowerLabel = useMemo(() => {
     if (!statusOk || !statusData?.data) return null;
-    const { plugWatts, switchSta, chargeRate, dischargeRate } = statusData.data;
-    // Prefer plugWatts; fall back to pre-refactor netWatts fields when mapper only
-    // filled charge/discharge (e.g. options.watts → dischargeRate path).
-    const watts =
-      typeof plugWatts === 'number'
-        ? plugWatts
-        : typeof dischargeRate === 'number' && dischargeRate > 0
-          ? dischargeRate
-          : typeof chargeRate === 'number' && chargeRate > 0
-            ? chargeRate
-            : undefined;
-    if (typeof watts !== 'number' && typeof switchSta !== 'boolean') {
+    const { plugWatts, switchSta, plugWattsAnomalous } = statusData.data;
+    // Known Smart Plug family: never fall back to charge/discharge (those may be
+    // unscaled station-path values and caused ~10× UI spikes like 11270 W).
+    if (typeof plugWatts !== 'number' && typeof switchSta !== 'boolean') {
       return null;
     }
+    const anomalous =
+      Boolean(plugWattsAnomalous) ||
+      (typeof plugWatts === 'number' && plugWatts > PLUG_POWER_CONFIG.ANOMALY_WATTS);
     return {
-      watts,
+      watts: typeof plugWatts === 'number' ? plugWatts : undefined,
       switchSta: typeof switchSta === 'boolean' ? switchSta : undefined,
+      anomalous,
     };
   }, [statusData, statusOk]);
 
@@ -188,8 +193,15 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
                       </p>
                     )}
                     {typeof plugPowerLabel.watts === 'number' && (
-                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                      <p
+                        className={`text-sm ${
+                          plugPowerLabel.anomalous
+                            ? 'text-amber-700 dark:text-amber-300'
+                            : 'text-gray-600 dark:text-gray-300'
+                        }`}
+                      >
                         Power: {plugPowerLabel.watts} W
+                        {plugPowerLabel.anomalous ? ' (anomaly — check scale)' : ''}
                       </p>
                     )}
                   </>
@@ -206,20 +218,15 @@ export const DeviceCard = memo(function DeviceCard({ device }: DeviceCardProps) 
                     {netWatts.label}: {netWatts.value} W
                   </p>
                 )}
+                {remainingLabel && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{remainingLabel}</p>
+                )}
               </div>
             )}
           </div>
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-medium ${
-              isMQTTActive
-                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
-            }`}
-          >
-            MQTT
-          </span>
+          <SourceBadge source={statusData?.source} timestamp={statusData?.timestamp} />
           <span
             className={`px-3 py-1 rounded-full text-xs font-medium ${
               Boolean(online)

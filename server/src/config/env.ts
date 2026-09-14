@@ -23,6 +23,30 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().optional(),
   WEBSOCKET_ENABLED: z.enum(['true', 'false']).optional(),
   WEBSOCKET_PATH: z.string().optional(),
+  /** Persistent data directory (SQLite, settings, contracts). Default: ./data */
+  DATA_DIR: z.string().min(1).optional(),
+  /** Express trust proxy hops (1 when behind Nginx). Default: 1 in production */
+  TRUST_PROXY: z
+    .string()
+    .regex(/^(true|false|\d+)$/i, 'TRUST_PROXY must be true, false, or a hop count')
+    .optional(),
+  /** Set false to disable Express /api rate limiting entirely */
+  RATE_LIMIT_ENABLED: z.enum(['true', 'false']).optional(),
+  /** Max requests per window (default 2000) */
+  RATE_LIMIT_MAX: z
+    .string()
+    .regex(/^\d+$/, 'RATE_LIMIT_MAX must be a number')
+    .optional(),
+  /** Window ms (default 900000 = 15 min) */
+  RATE_LIMIT_WINDOW_MS: z
+    .string()
+    .regex(/^\d+$/, 'RATE_LIMIT_WINDOW_MS must be a number')
+    .optional(),
+  /**
+   * Skip rate limit for private/loopback IPs (LAN + Docker bridge).
+   * Default true — home-lab safe. Set false if exposing publicly and you want IP limits.
+   */
+  RATE_LIMIT_SKIP_PRIVATE: z.enum(['true', 'false']).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -30,6 +54,8 @@ export type Env = z.infer<typeof envSchema>;
 export interface Config {
   port: number;
   nodeEnv: Env['NODE_ENV'];
+  /** Absolute or relative path for SQLite / settings / contracts */
+  dataDir: string;
   ecoflow: {
     accessKey: string;
     secretKey: string;
@@ -50,6 +76,15 @@ export interface Config {
   websocket?: {
     enabled: boolean;
     path: string;
+  };
+  /** Hop count for Express trust proxy (0 = off) */
+  trustProxy: number | boolean;
+  rateLimit: {
+    enabled: boolean;
+    max?: number;
+    windowMs?: number;
+    /** Skip RFC1918 / loopback (default true) */
+    skipPrivate: boolean;
   };
 }
 
@@ -78,9 +113,18 @@ export function getConfig(): Config {
   const mqttEnabled = env.ECOFLOW_MQTT_ENABLED === 'true';
   const mqttBrokerUrl = env.ECOFLOW_MQTT_BROKER_URL || 'mqtt://mqtt.ecoflow.com:1883';
 
+  let trustProxy: number | boolean = env.NODE_ENV === 'production' ? 1 : false;
+  if (env.TRUST_PROXY !== undefined) {
+    const tp = env.TRUST_PROXY.toLowerCase();
+    if (tp === 'true') trustProxy = 1;
+    else if (tp === 'false') trustProxy = false;
+    else trustProxy = parseInt(env.TRUST_PROXY, 10);
+  }
+
   cachedConfig = {
     port: parseInt(env.PORT, 10),
     nodeEnv: env.NODE_ENV,
+    dataDir: env.DATA_DIR || './data',
     ecoflow: {
       accessKey: env.ECOFLOW_ACCESS_KEY,
       secretKey: env.ECOFLOW_SECRET_KEY,
@@ -104,6 +148,15 @@ export function getConfig(): Config {
     websocket: {
       enabled: env.WEBSOCKET_ENABLED !== 'false',
       path: env.WEBSOCKET_PATH || '/ws',
+    },
+    trustProxy,
+    rateLimit: {
+      enabled: env.RATE_LIMIT_ENABLED !== 'false',
+      max: env.RATE_LIMIT_MAX ? parseInt(env.RATE_LIMIT_MAX, 10) : undefined,
+      windowMs: env.RATE_LIMIT_WINDOW_MS
+        ? parseInt(env.RATE_LIMIT_WINDOW_MS, 10)
+        : undefined,
+      skipPrivate: env.RATE_LIMIT_SKIP_PRIVATE !== 'false',
     },
   };
 

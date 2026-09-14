@@ -12,6 +12,8 @@ import { Router, Request, Response } from 'express';
 import { mqttService } from '../services/mqtt';
 import { ecoflowService } from '../services/ecoflow';
 import { restStatusCache } from '../services/restStatusCache';
+import { evaluateStatus } from '../services/alertService';
+import { recordSample } from '../services/historyService';
 import { apiRequestDuration, apiRequestTotal, deviceStatusUpdatesTotal } from '../utils/metrics';
 
 const router = Router();
@@ -78,6 +80,16 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
       apiRequestTotal.inc({ endpoint, status_code: statusCode });
       deviceStatusUpdatesTotal.inc({ device_id: deviceId, source: 'mqtt' });
 
+      try {
+        evaluateStatus(
+          deviceId,
+          mqttStatus.status,
+          mqttStatus.status.online as boolean | undefined
+        );
+      } catch {
+        // Alerts must not fail the status response
+      }
+
       // Return MQTT status
       res.json({
         deviceId,
@@ -112,6 +124,29 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
         source: cacheHit ? 'rest-cache' : 'rest',
       });
 
+      if (restResponse.data) {
+        try {
+          evaluateStatus(
+            deviceId,
+            restResponse.data,
+            restResponse.data.online as boolean | undefined
+          );
+        } catch {
+          // Alerts must not fail the status response
+        }
+        if (!cacheHit) {
+          try {
+            recordSample({
+              deviceId,
+              status: restResponse.data,
+              source: 'rest',
+            });
+          } catch {
+            // History must not fail the status response
+          }
+        }
+      }
+
       res.json({
         ...restResponse,
         source: 'rest',
@@ -121,6 +156,12 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
       });
     } catch (restError) {
       const err = restError as Error & { code?: string; name?: string };
+
+      try {
+        evaluateStatus(deviceId, null, false);
+      } catch {
+        // ignore
+      }
 
       // Record error metrics — honest failure, no invented SOC
       const duration = (Date.now() - start) / 1000;

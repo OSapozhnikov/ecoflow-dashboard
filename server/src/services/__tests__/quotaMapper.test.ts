@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   mapQuotaData,
   toDeviceStatusFields,
+  scalePlugTenthWatts,
   SOC_KEYS,
   INPUT_WATT_FIELDS,
   OUTPUT_WATT_FIELDS,
@@ -334,5 +335,56 @@ describe('mapQuotaData', () => {
     const result = mapQuotaData({ soc: 10 }, { watts: 88 });
     expect(result.plug).toBeUndefined();
     expect(result.dischargeRate).toBe(88);
+  });
+});
+
+describe('scalePlugTenthWatts', () => {
+  it('converts raw 11270 → 1127 W', () => {
+    expect(scalePlugTenthWatts(11270)).toEqual({
+      watts: 1127,
+      anomalous: false,
+    });
+  });
+
+  it('flags anomalous values above household ceiling', () => {
+    expect(scalePlugTenthWatts(50_000).anomalous).toBe(true);
+    expect(scalePlugTenthWatts(50_000).watts).toBe(5000);
+  });
+});
+
+describe('remaining charge/discharge time', () => {
+  it('maps cmsChgRemTime / cmsDsgRemTime minutes', () => {
+    const result = mapQuotaData({
+      cmsBattSoc: 40,
+      powInSumW: 200,
+      powOutSumW: 0,
+      cmsChgRemTime: 125,
+      cmsDsgRemTime: 400,
+    });
+
+    expect(result.remainingChargeMin).toBe(125);
+    expect(result.remainingDischargeMin).toBe(400);
+    expect(result.matched.remainingCharge).toBe('cmsChgRemTime');
+    expect(result.matched.remainingDischarge).toBe('cmsDsgRemTime');
+    expect(toDeviceStatusFields(result)).toMatchObject({
+      remainingChargeMin: 125,
+      remainingDischargeMin: 400,
+    });
+  });
+
+  it('maps snake_case remaining time keys', () => {
+    const result = mapQuotaData({
+      cms_batt_soc: 20,
+      cms_chg_rem_time: 60,
+      cms_dsg_rem_time: 180,
+    });
+    expect(result.remainingChargeMin).toBe(60);
+    expect(result.remainingDischargeMin).toBe(180);
+  });
+
+  it('omits remaining time when keys absent', () => {
+    const result = mapQuotaData({ cmsBattSoc: 50, powInSumW: 0, powOutSumW: 0 });
+    expect(result.remainingChargeMin).toBeUndefined();
+    expect(result.remainingDischargeMin).toBeUndefined();
   });
 });

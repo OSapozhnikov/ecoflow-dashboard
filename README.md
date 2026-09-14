@@ -103,6 +103,8 @@ docker compose up -d
 
 Nginx on `:80` proxies `/api/`, `/ws`, and `/health` to the server. It does **not** expose `/metrics` or `/api-docs` on port 80.
 
+**Rate limiting:** Express limits `/api` (default **2000 req / 15 min**). Private/loopback IPs (LAN + Docker bridge) are **skipped** by default so a polling dashboard behind Nginx does not 429 itself. Override with `RATE_LIMIT_*` / `TRUST_PROXY` in `.env.example`.
+
 ## API surface
 
 | Endpoint | Description |
@@ -111,7 +113,13 @@ Nginx on `:80` proxies `/api/`, `/ws`, and `/health` to the server. It does **no
 | `GET /ready` | Readiness (MQTT + data success when enabled) |
 | `GET /api/devices` | Device list |
 | `GET /api/devices/:deviceId/status` | Status (MQTT preferred, REST fallback); **502** `{ error: { code: 'STATUS_FETCH_ERROR' } }` if both fail — no fake 0% SOC |
+| `GET /api/devices/:deviceId/diagnostics` | List membership, MQTT cache, family, last REST error |
+| `GET /api/devices/:deviceId/history` | Raw samples (`from`/`to` ms); default last 30 days |
+| `GET /api/devices/:deviceId/history/monthly` | Monthly rollups (estimated Wh) |
 | `GET /api/devices/connection-status` | MQTT / WebSocket connection info |
+| `GET/PUT /api/settings` | Telegram + alert thresholds + retention (`data/settings.json`) |
+| `POST /api/settings/telegram/test` | Send a test Telegram message |
+| `GET/PUT /api/locations` | Location labels + device assignments |
 | `WS /ws` | Real-time status updates |
 | `GET /api-docs` | Swagger UI (port 5000) |
 | `GET /metrics` | Prometheus metrics (port 5000) |
@@ -120,14 +128,31 @@ Auth to Ecoflow: **HMAC-SHA256 + ACCESS_KEY / SECRET_KEY** (not OAuth2).
 
 Real-time path: MQTT via `/iot-open/sign/certification` → WebSocket `/ws` → React Query polling fallback (`DEVICES` 60s, `DEVICE_STATUS` 30s, `DEVICE_STATUS_WS` 60s). Client Axios limiter: 10 req / 60s.
 
+### Data directory (`DATA_DIR`, default `./data`)
+
+Docker Compose mounts `./data:/app/data`. Contents:
+
+| Path | Purpose |
+|------|---------|
+| `contracts/*.json` | Device field maps (SN prefix → quota keys). Drop a file + restart to add a SKU |
+| `ecoflow.sqlite` | 30-day samples + daily/monthly aggregates |
+| `settings.json` | Telegram bot + alert thresholds (gitignored) |
+| `locations.json` | Location groupings (gitignored) |
+
+**Smart Plug watts:** Ecoflow documents plug power in **0.1 W** units. The mapper divides by 10 once (`scalePlugTenthWatts`). Values still above 4000 W are flagged as anomalous in the UI.
+
+**Controls:** intentionally out of scope (monitor + alerts only).
+
 ## Project layout
 
 ```
 ecoflow-dashboard/
 ├── server/                 # Express API
 ├── client/                 # React + Vite SPA
-├── shared/                 # @ecoflow/shared
-├── docs/                   # Ecoflow PDF references
+├── shared/                 # @ecoflow/shared (mapper, contracts, types)
+├── data/                   # Runtime volume (contracts tracked; sqlite/settings gitignored)
+├── docs/                   # Ecoflow PDFs + TAU_8521_SPIKE.md
+├── .github/workflows/ci.yml
 ├── docker-compose.yml
 ├── docker-compose.dev.yml
 ├── .env.example
@@ -169,7 +194,11 @@ npm run test-mqtt --workspace=server
 ## Docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — auth, MQTT cert flow, polling intervals, Nginx proxy, ops, shared package
+- [docs/TAU_8521_SPIKE.md](./docs/TAU_8521_SPIKE.md) — Open API entitlement / vendor code 8521
+- [data/contracts/README.md](./data/contracts/README.md) — adding a device contract
 - Swagger: http://localhost:5000/api-docs (when server is running)
+
+If you expose the UI beyond LAN, put it behind reverse-proxy auth (Basic/SSO). The app itself has no multi-user login.
 
 ## License
 

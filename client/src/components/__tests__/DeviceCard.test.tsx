@@ -134,7 +134,7 @@ describe('DeviceCard', () => {
 
     render(<DeviceCard device={device} />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('MQTT')).toBeInTheDocument();
+    expect(screen.getByText('MQTT live')).toBeInTheDocument();
   });
 
   it('should handle missing device name', () => {
@@ -289,7 +289,7 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
-  it('falls back to dischargeRate when plugWatts missing (pre-refactor path)', () => {
+  it('does not fall back to dischargeRate for Smart Plug (avoids 10× scale bugs)', () => {
     const device = {
       sn: 'HW52ZDH59G8D4764',
       deviceName: 'Bathroom',
@@ -321,8 +321,8 @@ describe('DeviceCard', () => {
 
     render(<DeviceCard device={device} />, { wrapper: createWrapper() });
 
-    expect(screen.getByText(/Power:\s*88\s*W/)).toBeInTheDocument();
-    expect(screen.queryByText('Power unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Power:\s*88\s*W/)).not.toBeInTheDocument();
+    expect(screen.getByText('Power unavailable')).toBeInTheDocument();
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 

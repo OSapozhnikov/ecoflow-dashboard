@@ -24,6 +24,8 @@ import {
   deviceStatusCacheSize,
   errorsTotal,
 } from '../utils/metrics';
+import { recordSampleFromUpdate } from './historyService';
+import { evaluateStatus } from './alertService';
 
 export interface DeviceStatusUpdate {
   deviceSn: string;
@@ -414,6 +416,8 @@ export class MQTTService extends EventEmitter {
         mqttMessageProcessingDuration.observe({ topic }, duration);
         mqttMessagesTotal.inc({ topic, status: 'success' });
 
+        this.afterStatusCached(update);
+
         // Emit event for WebSocket/other listeners
         this.emit('status', update);
       } else {
@@ -477,7 +481,28 @@ export class MQTTService extends EventEmitter {
     const duration = (Date.now() - start) / 1000;
     mqttMessageProcessingDuration.observe({ topic }, duration);
     mqttMessagesTotal.inc({ topic, status: 'success' });
+    this.afterStatusCached(update);
     this.emit('status', update);
+  }
+
+  /**
+   * History + alerts after a successful status cache write.
+   */
+  private afterStatusCached(update: DeviceStatusUpdate): void {
+    try {
+      recordSampleFromUpdate(update);
+    } catch (err) {
+      logger.warn(`Failed to record history sample for ${update.deviceSn}:`, {
+        error: (err as Error).message,
+      });
+    }
+    try {
+      evaluateStatus(update.deviceSn, update.status, update.status.online as boolean | undefined);
+    } catch (err) {
+      logger.warn(`Failed to evaluate alerts for ${update.deviceSn}:`, {
+        error: (err as Error).message,
+      });
+    }
   }
 
   /**
@@ -733,6 +758,7 @@ export class MQTTService extends EventEmitter {
         consWatt: typeof consWattRaw === 'number' ? consWattRaw : undefined,
         watts: typeof wattsRaw === 'number' ? wattsRaw : undefined,
         forcePlug,
+        sn: deviceSn,
       });
       const statusFields = toDeviceStatusFields(mapped);
 
@@ -941,6 +967,23 @@ export class MQTTService extends EventEmitter {
   /** Timestamp of last successfully parsed MQTT device status (ms), or null */
   getLastSuccessAt(): number | null {
     return this.lastSuccessAt;
+  }
+
+  /** Cached status update for a device SN, if any. */
+  getCachedStatus(sn: string): DeviceStatusUpdate | undefined {
+    return this.statusCache.get(sn);
+  }
+
+  /** Serial numbers currently marked for MQTT subscription. */
+  getSubscribedDevices(): string[] {
+    return Array.from(this.subscribedDevices);
+  }
+
+  /** Iterate all cached status updates (history snapshot job). */
+  forEachCachedStatus(cb: (update: DeviceStatusUpdate) => void): void {
+    for (const update of this.statusCache.values()) {
+      cb(update);
+    }
   }
 
   /**

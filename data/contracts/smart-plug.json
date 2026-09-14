@@ -1,0 +1,22 @@
+{
+  "id": "smart-plug",
+  "match": {
+    "snPrefixes": ["HW52"],
+    "productSubstrings": ["smart plug", "smartplug"]
+  },
+  "capabilities": {
+    "battery": false,
+    "plug": true,
+    "remainingTime": false
+  },
+  "fields": [
+    { "path": "2_1.switchSta", "target": "switchSta" },
+    { "path": "switchSta", "target": "switchSta" },
+    { "path": "2_1.watts", "target": "plugWatts", "scale": 0.1 },
+    { "path": "watts", "target": "plugWatts", "scale": 0.1 },
+    { "path": "2_1.volt", "target": "volt" },
+    { "path": "volt", "target": "volt" },
+    { "path": "2_1.temp", "target": "temp" },
+    { "path": "temp", "target": "temp" }
+  ]
+}

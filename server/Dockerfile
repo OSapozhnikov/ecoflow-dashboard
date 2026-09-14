@@ -31,7 +31,12 @@ WORKDIR /app
 COPY --from=deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 COPY --chown=nodejs:nodejs server/package*.json ./
+# Bundled contract defaults (seeded into DATA_DIR/contracts when empty)
+COPY --chown=nodejs:nodejs server/src/contracts/defaults ./contracts/defaults
+# Writable data dir for SQLite / settings (compose mounts ./data → /app/data)
+RUN mkdir -p /app/data/contracts && chown -R nodejs:nodejs /app/data
 USER nodejs
+ENV DATA_DIR=/app/data
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD node -e "require('http').get('http://localhost:5000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"

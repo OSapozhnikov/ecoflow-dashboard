@@ -8,6 +8,8 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.ts'],
     exclude: ['node_modules', 'dist'],
+    // historyDb uses a process-wide DatabaseSync singleton
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

@@ -42,6 +42,11 @@ lerna-debug.log*
 # Docker
 .docker/
 
+# Runtime data (secrets + SQLite); contracts under data/contracts stay tracked
+/data/*.sqlite
+/data/settings.json
+/data/locations.json
+
 # OS
 Thumbs.db
 

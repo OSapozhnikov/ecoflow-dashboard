@@ -14,12 +14,21 @@ import { register } from './utils/metrics';
 import { swaggerSpec } from './config/swagger';
 import devicesRouter from './routes/devices';
 import statusRouter from './routes/status';
+import settingsRouter from './routes/settings';
+import locationsRouter from './routes/locations';
+import historyRouter from './routes/history';
+import diagnosticsRouter from './routes/diagnostics';
 import { mqttService } from './services/mqtt';
 import { ecoflowService } from './services/ecoflow';
 
 export function createApp(): Express {
   const app = express();
   const config = getConfig();
+
+  // Needed behind Nginx/Docker so req.ip is the real client (X-Forwarded-For)
+  if (config.trustProxy) {
+    app.set('trust proxy', config.trustProxy);
+  }
 
   // Middleware
   // CORS configuration - allow multiple origins in development
@@ -167,7 +176,11 @@ export function createApp(): Express {
   }));
 
   // API routes
+  app.use('/api/settings', settingsRouter);
+  app.use('/api/locations', locationsRouter);
   app.use('/api/devices', devicesRouter);
+  app.use('/api/devices', historyRouter);
+  app.use('/api/devices', diagnosticsRouter);
   app.use('/api/devices', statusRouter);
 
   // Error handling

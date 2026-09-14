@@ -44,6 +44,11 @@ export class EcoflowService {
   private lastSuccessAt: number | null = null;
   /** Most recent signing string + public params (for quota/all reject debug). */
   private lastSigningDebug: EcoflowSigningDebugContext | null = null;
+  /** Last REST error per device SN (diagnostics). */
+  private lastErrors = new Map<
+    string,
+    { code?: string; message: string; at: number }
+  >();
 
   constructor() {
     this.client = axios.create({
@@ -62,6 +67,24 @@ export class EcoflowService {
   /** Last HMAC canonical string / public signing params (no secret). */
   getLastSigningDebug(): EcoflowSigningDebugContext | null {
     return this.lastSigningDebug;
+  }
+
+  getLastDeviceError(
+    deviceSn: string
+  ): { code?: string; message: string; at: number } | undefined {
+    return this.lastErrors.get(deviceSn);
+  }
+
+  private setLastDeviceError(
+    deviceSn: string,
+    message: string,
+    code?: string
+  ): void {
+    this.lastErrors.set(deviceSn, { code, message, at: Date.now() });
+  }
+
+  private clearLastDeviceError(deviceSn: string): void {
+    this.lastErrors.delete(deviceSn);
   }
 
   /**
@@ -532,68 +555,80 @@ export class EcoflowService {
     const endpoint = '/iot-open/sign/device/quota/all';
     // For GET requests, pass params as data object (like in Java example)
     // The authenticatedRequest will extract them for signature and URL
-    const response = await this.authenticatedRequest<unknown>(
-      'GET',
-      endpoint,
-      { sn: deviceSn }, // Pass as data object, not queryParams
-      false
-    );
+    try {
+      const response = await this.authenticatedRequest<unknown>(
+        'GET',
+        endpoint,
+        { sn: deviceSn }, // Pass as data object, not queryParams
+        false
+      );
 
-    // Handle different response structures from Ecoflow API
-    logger.debug('Device Status API Response:', { response });
+      // Handle different response structures from Ecoflow API
+      logger.debug('Device Status API Response:', { response });
 
-    // Ecoflow API returns: { code: "0", message: "Success", data: {...} }
-    if (response && typeof response === 'object' && 'data' in response) {
-      const apiResponse = response as { 
-        code?: string; 
-        message?: string; 
-        data?: unknown;
-      };
-
-      if (apiResponse.code && apiResponse.code !== '0') {
-        this.throwQuotaAllApiError(deviceSn, apiResponse.code, apiResponse.message, response);
-      }
-
-      if (apiResponse.data && typeof apiResponse.data === 'object') {
-        // Parse quota data into device status format
-        // Flat keys e.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
-        const quotaData = apiResponse.data as Record<string, unknown>;
-        const forcePlug = isSmartPlugFamily(resolveDeviceFamily({ sn: deviceSn }));
-        const mapped = mapQuotaData(quotaData, { forcePlug });
-        const statusFields = toDeviceStatusFields(mapped);
-
-        return {
-          deviceId: deviceSn,
-          data: {
-            deviceId: deviceSn,
-            timestamp: Date.now(),
-            ...quotaData, // Include all other fields
-            ...statusFields, // Normalized fields win over raw 0.1 W watts etc.
-          },
+      // Ecoflow API returns: { code: "0", message: "Success", data: {...} }
+      if (response && typeof response === 'object' && 'data' in response) {
+        const apiResponse = response as {
+          code?: string;
+          message?: string;
+          data?: unknown;
         };
+
+        if (apiResponse.code && apiResponse.code !== '0') {
+          this.throwQuotaAllApiError(deviceSn, apiResponse.code, apiResponse.message, response);
+        }
+
+        if (apiResponse.data && typeof apiResponse.data === 'object') {
+          // Parse quota data into device status format
+          // Flat keys e.g. { "bmsMaster.soc": "100", "bmsMaster.inputWatts": "0", ... }
+          const quotaData = apiResponse.data as Record<string, unknown>;
+          const forcePlug = isSmartPlugFamily(resolveDeviceFamily({ sn: deviceSn }));
+          const mapped = mapQuotaData(quotaData, { forcePlug, sn: deviceSn });
+          const statusFields = toDeviceStatusFields(mapped);
+
+          this.clearLastDeviceError(deviceSn);
+          return {
+            deviceId: deviceSn,
+            data: {
+              deviceId: deviceSn,
+              timestamp: Date.now(),
+              ...quotaData, // Include all other fields
+              ...statusFields, // Normalized fields win over raw 0.1 W watts etc.
+            },
+          };
+        }
       }
-    }
 
-    // If response is already in expected format
-    if (response && typeof response === 'object' && 'deviceId' in response && 'data' in response) {
-      return response as EcoflowDeviceStatusResponse;
-    }
-
-    // Handle error responses (like signature errors)
-    if (response && typeof response === 'object' && 'code' in response) {
-      const errorResponse = response as { code?: string; message?: string };
-      if (errorResponse.code && errorResponse.code !== '0') {
-        this.throwQuotaAllApiError(
-          deviceSn,
-          errorResponse.code,
-          errorResponse.message,
-          response
-        );
+      // If response is already in expected format
+      if (response && typeof response === 'object' && 'deviceId' in response && 'data' in response) {
+        this.clearLastDeviceError(deviceSn);
+        return response as EcoflowDeviceStatusResponse;
       }
-    }
 
-    logger.warn('Unexpected response structure from Device Status API:', { response });
-    throw new Error('Unexpected response structure from Device Status API');
+      // Handle error responses (like signature errors)
+      if (response && typeof response === 'object' && 'code' in response) {
+        const errorResponse = response as { code?: string; message?: string };
+        if (errorResponse.code && errorResponse.code !== '0') {
+          this.throwQuotaAllApiError(
+            deviceSn,
+            errorResponse.code,
+            errorResponse.message,
+            response
+          );
+        }
+      }
+
+      logger.warn('Unexpected response structure from Device Status API:', { response });
+      const unexpected = new Error('Unexpected response structure from Device Status API');
+      this.setLastDeviceError(deviceSn, unexpected.message);
+      throw unexpected;
+    } catch (error) {
+      const err = error as Error & { code?: string; name?: string };
+      if (err.name !== 'EcoflowAPIError') {
+        this.setLastDeviceError(deviceSn, err.message, err.code);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -634,6 +669,7 @@ export class EcoflowService {
         `Vendor code: ${apiCode}.`
       : `Ecoflow API error: ${messageText}`;
 
+    this.setLastDeviceError(deviceSn, message, String(apiCode));
     throw new EcoflowAPIError(message, String(apiCode), httpStatus, response);
   }
 

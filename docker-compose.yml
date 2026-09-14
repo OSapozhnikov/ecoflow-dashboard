@@ -9,6 +9,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=5000
+      - DATA_DIR=/app/data
       - ECOFLOW_ACCESS_KEY=${ECOFLOW_ACCESS_KEY}
       - ECOFLOW_SECRET_KEY=${ECOFLOW_SECRET_KEY}
       - ECOFLOW_API_BASE_URL=${ECOFLOW_API_BASE_URL:-https://api-e.ecoflow.com}
@@ -24,6 +25,10 @@ services:
       # WebSocket Configuration (Optional)
       - WEBSOCKET_ENABLED=${WEBSOCKET_ENABLED:-true}
       - WEBSOCKET_PATH=${WEBSOCKET_PATH:-/ws}
+    volumes:
+      # Persist SQLite, settings, locations, and runtime contracts
+      # Ensure the host ./data directory is writable by container UID 1001 (nodejs)
+      - ./data:/app/data
     networks:
       - ecoflow-network
     restart: always
