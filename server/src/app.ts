@@ -18,6 +18,7 @@ import settingsRouter from './routes/settings';
 import locationsRouter from './routes/locations';
 import historyRouter from './routes/history';
 import diagnosticsRouter from './routes/diagnostics';
+import quotaRawRouter from './routes/quotaRaw';
 import { mqttService } from './services/mqtt';
 import { ecoflowService } from './services/ecoflow';
 
@@ -181,6 +182,7 @@ export function createApp(): Express {
   app.use('/api/devices', devicesRouter);
   app.use('/api/devices', historyRouter);
   app.use('/api/devices', diagnosticsRouter);
+  app.use('/api/devices', quotaRawRouter);
   app.use('/api/devices', statusRouter);
 
   // Error handling

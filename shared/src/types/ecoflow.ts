@@ -31,6 +31,28 @@ export interface BaseDevice {
 /**
  * Device status interface
  */
+export interface DevicePortsTelemetry {
+  acInW?: number;
+  /** Sum of abs(AC out lines) */
+  acOutW?: number;
+  acOutLinesW?: number[];
+  pvW?: number;
+  pv2W?: number;
+  dc12vW?: number;
+  typec1W?: number;
+  typec2W?: number;
+  typec3W?: number;
+  qcusb1W?: number;
+  qcusb2W?: number;
+}
+
+export interface DeviceLimitsTelemetry {
+  maxChargeSoc?: number;
+  minDischargeSoc?: number;
+  backupReserveSoc?: number;
+  energyBackupEnabled?: boolean;
+}
+
 export interface BaseDeviceStatus {
   deviceId: string;
   batteryLevel: number; // 0-100 (unused / 0 for Smart Plug)
@@ -50,10 +72,16 @@ export interface BaseDeviceStatus {
   volt?: number;
   /** Smart Plug temperature */
   temp?: number;
+  /** Vendor runTime in seconds; omit when unknown */
+  runTimeSec?: number;
   /** Minutes until full (Delta 3 cmsChgRemTime); omit when unknown */
   remainingChargeMin?: number;
   /** Minutes until empty (Delta 3 cmsDsgRemTime); omit when unknown */
   remainingDischargeMin?: number;
+  /** Delta 3 port power breakdown (whole W) */
+  ports?: DevicePortsTelemetry;
+  /** Delta 3 charge / backup limits */
+  limits?: DeviceLimitsTelemetry;
   [key: string]: unknown; // For additional fields from API
 }
 

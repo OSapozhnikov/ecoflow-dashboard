@@ -66,6 +66,42 @@ describe('contractEngine', () => {
     expect(mapped.matched.charge).toBe('powInSumW');
   });
 
+  it('maps ports and limits for D3M1 live-style fixture', () => {
+    const mapped = mapQuotaData(
+      {
+        cmsBattSoc: 89,
+        powInSumW: 246,
+        powOutSumW: 241,
+        powGetAcIn: 246,
+        powGetAcOutList: { powGetAcOutItem: [-241, 0, 0, 0, 0] },
+        powGetPv: 0,
+        powGetPv2: 0,
+        powGet12v: 0,
+        powGetTypec1: 0,
+        cmsMaxChgSoc: 90,
+        cmsMinDsgSoc: 0,
+        backupReverseSoc: 50,
+        energyBackupEn: false,
+        cmsChgRemTime: 12927,
+        cmsDsgRemTime: 14101,
+      },
+      { sn: 'D3M1ZE1A9H990313' }
+    );
+
+    expect(mapped.ports?.acInW).toBe(246);
+    expect(mapped.ports?.acOutW).toBe(241);
+    expect(mapped.ports?.acOutLinesW?.[0]).toBe(241);
+    expect(mapped.ports?.pvW).toBe(0);
+    expect(mapped.limits?.maxChargeSoc).toBe(90);
+    expect(mapped.limits?.minDischargeSoc).toBe(0);
+    expect(mapped.limits?.backupReserveSoc).toBe(50);
+    expect(mapped.limits?.energyBackupEnabled).toBe(false);
+
+    const fields = toDeviceStatusFields(mapped);
+    expect(fields.ports?.acOutW).toBe(241);
+    expect(fields.limits?.maxChargeSoc).toBe(90);
+  });
+
   it('maps Smart Plug fixture via contract with /10 watts', () => {
     const contract = resolveContract({ sn: 'HW52BATHROOM' });
     const mapped = mapPayloadWithContract(contract!, {
@@ -79,6 +115,25 @@ describe('contractEngine', () => {
     expect(mapped.plug?.volt).toBe(230);
     expect(mapped.status).toBe('discharging');
     expect(toDeviceStatusFields(mapped).plugWatts).toBe(1140);
+  });
+
+  it('maps HW52 live merge watts/volt/runTime via contract', () => {
+    const contract = resolveContract({ sn: 'HW52ZDH59G8D4764' });
+    const mapped = mapPayloadWithContract(contract!, {
+      runTime: 80946,
+      volt: 229,
+      watts: 20,
+      consWatt: -20,
+      current: 494,
+    });
+
+    expect(mapped.plug?.watts).toBe(2);
+    expect(mapped.plug?.volt).toBe(229);
+    expect(mapped.plug?.runTimeSec).toBe(80946);
+    expect(mapped.matched.runTime).toBe('runTime');
+    const fields = toDeviceStatusFields(mapped);
+    expect(fields.plugWatts).toBe(2);
+    expect(fields.runTimeSec).toBe(80946);
   });
 
   it('mapQuotaData uses contract when sn is provided', () => {

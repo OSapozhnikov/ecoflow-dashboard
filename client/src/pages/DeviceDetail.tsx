@@ -3,7 +3,7 @@
  */
 
 import { useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deviceFamilyLabel,
@@ -19,8 +19,11 @@ import { SourceBadge } from '../components/SourceBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { DeviceHistoryChart } from '../components/DeviceHistoryChart';
+import { RawQuotaLab } from '../components/RawQuotaLab';
+import { StationPortsLimits } from '../components/StationPortsLimits';
 import { formatDeviceStatusError } from '../utils/formatDeviceStatusError';
 import { formatRemainingMinutes } from '../utils/formatRemainingTime';
+import { formatRunTimeHours } from '../utils/formatRunTimeHours';
 import { api } from '../services/api';
 import type { Device, DeviceListResponse } from '../types/ecoflow';
 
@@ -48,6 +51,8 @@ interface DiagnosticsPayload {
 
 export function DeviceDetail() {
   const { deviceId } = useParams<{ deviceId: string }>();
+  const [searchParams] = useSearchParams();
+  const labRaw = searchParams.get('lab') === 'raw';
   const queryClient = useQueryClient();
   const { data, isLoading, error, isError } = useDeviceStatus(deviceId || '', !!deviceId);
 
@@ -184,7 +189,11 @@ export function DeviceDetail() {
                     (typeof plugWatts === 'number' &&
                       plugWatts > PLUG_POWER_CONFIG.ANOMALY_WATTS);
                   const hasSwitch = typeof data.data.switchSta === 'boolean';
-                  if (!hasSwitch && typeof plugWatts !== 'number') {
+                  const hasWatts = typeof plugWatts === 'number';
+                  const hasVolt = typeof data.data.volt === 'number';
+                  const runTimeLabel = formatRunTimeHours(data.data.runTimeSec);
+                  const hasTemp = typeof data.data.temp === 'number';
+                  if (!hasSwitch && !hasWatts && !hasVolt && !runTimeLabel && !hasTemp) {
                     return (
                       <p className="text-gray-500 dark:text-gray-400">Power unavailable</p>
                     );
@@ -199,20 +208,25 @@ export function DeviceDetail() {
                           </span>
                         </p>
                       )}
-                      {typeof plugWatts === 'number' && (
+                      {hasWatts && (
                         <p className={anomalous ? 'text-amber-700 dark:text-amber-300' : ''}>
                           Power:{' '}
                           <span className="font-medium">{plugWatts} W</span>
                           {anomalous ? ' (anomaly — check scale)' : ''}
                         </p>
                       )}
-                      {typeof data.data.volt === 'number' && (
+                      {hasVolt && (
                         <p>
                           Voltage:{' '}
                           <span className="font-medium">{data.data.volt} V</span>
                         </p>
                       )}
-                      {typeof data.data.temp === 'number' && (
+                      {runTimeLabel && (
+                        <p>
+                          Runtime: <span className="font-medium">{runTimeLabel}</span>
+                        </p>
+                      )}
+                      {hasTemp && (
                         <p>
                           Temperature:{' '}
                           <span className="font-medium">{data.data.temp} °C</span>
@@ -259,6 +273,8 @@ export function DeviceDetail() {
                   <ChargeRate rate={data.data.dischargeRate} />
                 </div>
               )}
+
+              <StationPortsLimits ports={data.data.ports} limits={data.data.limits} />
             </div>
           )}
 
@@ -296,6 +312,8 @@ export function DeviceDetail() {
                   )}
                 </section>
               )}
+
+              <RawQuotaLab deviceId={deviceId} autoOpen={labRaw} />
             </div>
           )}
         </div>

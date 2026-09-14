@@ -17,6 +17,8 @@
     { "path": "2_1.volt", "target": "volt" },
     { "path": "volt", "target": "volt" },
     { "path": "2_1.temp", "target": "temp" },
-    { "path": "temp", "target": "temp" }
+    { "path": "temp", "target": "temp" },
+    { "path": "2_1.runTime", "target": "runTime" },
+    { "path": "runTime", "target": "runTime" }
   ]
 }

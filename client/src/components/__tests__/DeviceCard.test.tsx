@@ -94,6 +94,19 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Online')).toBeInTheDocument();
   });
 
+  it('links Inspect quota to lab=raw on device detail', () => {
+    const device = {
+      sn: 'ABC123',
+      deviceName: 'Test Device',
+      online: 1,
+    };
+
+    render(<DeviceCard device={device} />, { wrapper: createWrapper() });
+
+    const inspect = screen.getByRole('link', { name: 'Inspect quota' });
+    expect(inspect).toHaveAttribute('href', '/device/ABC123?lab=raw');
+  });
+
   it('should show offline status', () => {
     const device = {
       sn: 'ABC123',
@@ -157,7 +170,7 @@ describe('DeviceCard', () => {
 
     render(<DeviceCard device={device} />, { wrapper: createWrapper() });
 
-    const link = screen.getByRole('link');
+    const link = screen.getByRole('link', { name: /Test Device/ });
     expect(link).toHaveAttribute('href', '/device/ABC123');
   });
 

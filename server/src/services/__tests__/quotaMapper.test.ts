@@ -272,6 +272,32 @@ describe('mapQuotaData', () => {
     expect(toDeviceStatusFields(result).plugWatts).toBe(1140);
   });
 
+  it('maps live HW52 merge: watts /10, volt, runTimeSec', () => {
+    const liveMerged = {
+      dstTime: 3600,
+      heartbeatFrequency: 2,
+      utcTime: 1789387527,
+      timeZone: 7200,
+      runTime: 80946,
+      volt: 229,
+      parentWifiRssi: -52,
+      watts: 20,
+      consWatt: -20,
+      current: 494,
+    };
+    const result = mapQuotaData(liveMerged, { forcePlug: true, sn: 'HW52ZDH59G8D4764' });
+    expect(result.plug?.watts).toBe(2);
+    expect(result.plug?.volt).toBe(229);
+    expect(result.plug?.runTimeSec).toBe(80946);
+    expect(result.plug?.switchSta).toBeUndefined();
+    expect(result.matched.plugWatts).toBe('watts');
+    expect(result.matched.runTime).toBe('runTime');
+    const fields = toDeviceStatusFields(result);
+    expect(fields.plugWatts).toBe(2);
+    expect(fields.volt).toBe(229);
+    expect(fields.runTimeSec).toBe(80946);
+  });
+
   it('forcePlug without plug keys does not invent Off / 0 W', () => {
     const result = mapQuotaData({ lanState: 3, brightness: 1023 }, { forcePlug: true });
     expect(result.plug).toBeDefined();
@@ -386,5 +412,45 @@ describe('remaining charge/discharge time', () => {
     const result = mapQuotaData({ cmsBattSoc: 50, powInSumW: 0, powOutSumW: 0 });
     expect(result.remainingChargeMin).toBeUndefined();
     expect(result.remainingDischargeMin).toBeUndefined();
+  });
+});
+
+describe('ports and limits (Delta 3)', () => {
+  const liveMerged = {
+    powOutSumW: 241,
+    powInSumW: 246,
+    powGetAcIn: 246,
+    powGetAcOutList: { powGetAcOutItem: [-241, 0, 0, 0, 0] },
+    powGet12vList: { powGet12vItem: [0, 0] },
+    powGetPv: 0,
+    cmsChgRemTime: 12927,
+    energyBackupEn: false,
+    powGet12v: 0,
+    cmsBattSoc: 89,
+    backupReverseSoc: 50,
+    cmsMaxChgSoc: 90,
+    cmsMinDsgSoc: 0,
+    powGetPv2: 0,
+    cmsChgDsgState: 0,
+    powGetQcusb1: 0,
+    powGetQcusb2: 0,
+    powGetTypec3: 0,
+    powGetTypec1: 0,
+    powGetTypec2: 0,
+    cmsDsgRemTime: 14101,
+  };
+
+  it('extracts ports and limits from live MQTT-style merge', () => {
+    const result = mapQuotaData(liveMerged);
+    expect(result.batteryLevel).toBe(89);
+    expect(result.ports?.acInW).toBe(246);
+    expect(result.ports?.acOutW).toBe(241);
+    expect(result.ports?.acOutLinesW).toEqual([241, 0, 0, 0, 0]);
+    expect(result.ports?.pvW).toBe(0);
+    expect(result.ports?.dc12vW).toBe(0);
+    expect(result.limits?.maxChargeSoc).toBe(90);
+    expect(result.limits?.backupReserveSoc).toBe(50);
+    expect(result.limits?.energyBackupEnabled).toBe(false);
+    expect(toDeviceStatusFields(result).ports?.acOutW).toBe(241);
   });
 });

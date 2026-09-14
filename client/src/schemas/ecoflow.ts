@@ -35,6 +35,31 @@ export const DeviceListResponseSchema = z.object({
 /**
  * Schema for Device Status
  */
+const DevicePortsSchema = z
+  .object({
+    acInW: z.number().optional(),
+    acOutW: z.number().optional(),
+    acOutLinesW: z.array(z.number()).optional(),
+    pvW: z.number().optional(),
+    pv2W: z.number().optional(),
+    dc12vW: z.number().optional(),
+    typec1W: z.number().optional(),
+    typec2W: z.number().optional(),
+    typec3W: z.number().optional(),
+    qcusb1W: z.number().optional(),
+    qcusb2W: z.number().optional(),
+  })
+  .passthrough();
+
+const DeviceLimitsSchema = z
+  .object({
+    maxChargeSoc: z.number().min(0).max(100).optional(),
+    minDischargeSoc: z.number().min(0).max(100).optional(),
+    backupReserveSoc: z.number().min(0).max(100).optional(),
+    energyBackupEnabled: z.boolean().optional(),
+  })
+  .passthrough();
+
 export const DeviceStatusSchema = z.object({
   deviceId: z.string(),
   batteryLevel: z.number().min(0).max(100),
@@ -48,8 +73,11 @@ export const DeviceStatusSchema = z.object({
   plugWattsAnomalous: z.boolean().optional(),
   volt: z.number().optional(),
   temp: z.number().optional(),
+  runTimeSec: z.number().min(0).optional(),
   remainingChargeMin: z.number().min(0).optional(),
   remainingDischargeMin: z.number().min(0).optional(),
+  ports: DevicePortsSchema.optional(),
+  limits: DeviceLimitsSchema.optional(),
 }).passthrough();
 
 /**

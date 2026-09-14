@@ -632,6 +632,81 @@ export class EcoflowService {
   }
 
   /**
+   * Lab: raw quota/all envelope without mapping into DeviceStatus.
+   * Non-zero vendor codes return ok:false (no throw) so the UI can show the reject body.
+   */
+  async getRawQuotaAll(deviceSn: string): Promise<{
+    ok: boolean;
+    code?: string | number;
+    message?: string;
+    data?: unknown;
+    raw: unknown;
+  }> {
+    const endpoint = '/iot-open/sign/device/quota/all';
+    try {
+      const response = await this.authenticatedRequest<unknown>(
+        'GET',
+        endpoint,
+        { sn: deviceSn },
+        false
+      );
+
+      if (response && typeof response === 'object') {
+        const apiResponse = response as {
+          code?: string | number;
+          message?: string;
+          data?: unknown;
+        };
+        const code = apiResponse.code;
+        const codeStr = code !== undefined && code !== null ? String(code) : undefined;
+        const ok = codeStr === '0' || codeStr === undefined;
+
+        if (codeStr && codeStr !== '0') {
+          this.setLastDeviceError(
+            deviceSn,
+            apiResponse.message || codeStr,
+            codeStr
+          );
+          return {
+            ok: false,
+            code,
+            message: apiResponse.message,
+            data: apiResponse.data,
+            raw: response,
+          };
+        }
+
+        if (ok && apiResponse.data !== undefined) {
+          this.clearLastDeviceError(deviceSn);
+        }
+
+        return {
+          ok: true,
+          code,
+          message: apiResponse.message,
+          data: apiResponse.data,
+          raw: response,
+        };
+      }
+
+      return {
+        ok: false,
+        message: 'Unexpected response structure from Device Status API',
+        raw: response,
+      };
+    } catch (error) {
+      const err = error as Error & { code?: string; name?: string; response?: unknown };
+      this.setLastDeviceError(deviceSn, err.message, err.code);
+      return {
+        ok: false,
+        code: err.code,
+        message: err.message,
+        raw: err.response ?? { error: err.message },
+      };
+    }
+  }
+
+  /**
    * Log quota/all reject details (SN, API code, canonical signing string — no secret)
    * and throw a typed EcoflowAPIError. Misleading "signature is wrong" is clarified
    * so Tau (P351…) vs Taurus (D3M1…) failures are easier to compare in ops logs.

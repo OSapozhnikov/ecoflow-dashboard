@@ -378,6 +378,51 @@ describe('EcoflowService', () => {
     });
   });
 
+  describe('getRawQuotaAll', () => {
+    it('returns ok envelope with raw data without throwing', async () => {
+      const mockResponse = {
+        code: '0',
+        message: 'Success',
+        data: {
+          cmsBattSoc: 88,
+          powInSumW: 227,
+        },
+      };
+
+      mockRequest.mockResolvedValue({
+        data: mockResponse,
+        status: 200,
+      });
+
+      const result = await ecoflowService.getRawQuotaAll('D3M1ZE1A9H998313');
+
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe('0');
+      expect(result.data).toEqual(mockResponse.data);
+      expect(result.raw).toEqual(mockResponse);
+    });
+
+    it('returns ok:false for vendor 8521 without throwing', async () => {
+      const mockResponse = {
+        code: '8521',
+        message: 'signature is wrong',
+        data: null,
+      };
+
+      mockRequest.mockResolvedValue({
+        data: mockResponse,
+        status: 200,
+      });
+
+      const result = await ecoflowService.getRawQuotaAll('P351ZEH4PGCC0498');
+
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe('8521');
+      expect(result.message).toBe('signature is wrong');
+      expect(result.raw).toEqual(mockResponse);
+    });
+  });
+
   describe('getMQTTCertification', () => {
     it('should return MQTT certification when API call succeeds', async () => {
       const mockResponse = {

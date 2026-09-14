@@ -7,7 +7,9 @@
   "capabilities": {
     "battery": true,
     "plug": false,
-    "remainingTime": true
+    "remainingTime": true,
+    "ports": true,
+    "limits": true
   },
   "fields": [
     { "path": "cmsBattSoc", "target": "soc" },
@@ -21,6 +23,19 @@
     { "path": "cmsChgRemTime", "target": "remainingCharge" },
     { "path": "cms_chg_rem_time", "target": "remainingCharge" },
     { "path": "cmsDsgRemTime", "target": "remainingDischarge" },
-    { "path": "cms_dsg_rem_time", "target": "remainingDischarge" }
+    { "path": "cms_dsg_rem_time", "target": "remainingDischarge" },
+    { "path": "powGetAcIn", "target": "acIn" },
+    { "path": "powGetPv", "target": "pv" },
+    { "path": "powGetPv2", "target": "pv2" },
+    { "path": "powGet12v", "target": "dc12v" },
+    { "path": "powGetTypec1", "target": "typec1" },
+    { "path": "powGetTypec2", "target": "typec2" },
+    { "path": "powGetTypec3", "target": "typec3" },
+    { "path": "powGetQcusb1", "target": "qcusb1" },
+    { "path": "powGetQcusb2", "target": "qcusb2" },
+    { "path": "cmsMaxChgSoc", "target": "maxChargeSoc" },
+    { "path": "cmsMinDsgSoc", "target": "minDischargeSoc" },
+    { "path": "backupReverseSoc", "target": "backupReserveSoc" },
+    { "path": "energyBackupEn", "target": "energyBackupEn" }
   ]
 }

@@ -114,6 +114,7 @@ Nginx on `:80` proxies `/api/`, `/ws`, and `/health` to the server. It does **no
 | `GET /api/devices` | Device list |
 | `GET /api/devices/:deviceId/status` | Status (MQTT preferred, REST fallback); **502** `{ error: { code: 'STATUS_FETCH_ERROR' } }` if both fail — no fake 0% SOC |
 | `GET /api/devices/:deviceId/diagnostics` | List membership, MQTT cache, family, last REST error |
+| `GET /api/devices/:deviceId/quota/raw` | Lab: live REST `quota/all` envelope + last MQTT raw (manual only) |
 | `GET /api/devices/:deviceId/history` | Raw samples (`from`/`to` ms); default last 30 days |
 | `GET /api/devices/:deviceId/history/monthly` | Monthly rollups (estimated Wh) |
 | `GET /api/devices/connection-status` | MQTT / WebSocket connection info |
@@ -197,6 +198,20 @@ npm run test-mqtt --workspace=server
 - [docs/TAU_8521_SPIKE.md](./docs/TAU_8521_SPIKE.md) — Open API entitlement / vendor code 8521
 - [data/contracts/README.md](./data/contracts/README.md) — adding a device contract
 - Swagger: http://localhost:5000/api-docs (when server is running)
+
+### Lab — raw quota inspector
+
+From a device card, open **Inspect quota** (or `/device/:id?lab=raw`). On the detail page use **Fetch raw** (manual only — no polling).
+
+- **REST** — full `quota/all` when the SN is entitled; otherwise vendor error body (e.g. 8521).
+- **MQTT merged** — fields accumulated from partial MQTT heartbeats since server start (use this when REST fails).
+- **MQTT last** — single latest message only (often just a few power keys).
+
+Useful when writing `data/contracts/*.json`.
+
+### Station Ports & Limits
+
+For Delta 3 Max Plus / Plus, Device Detail shows read-only **Ports** (AC in/out, PV, 12V, USB) and **Limits** (charge ceiling, discharge floor, backup reserve) when MQTT/REST provide those keys. AC out line watts use absolute values (vendor sign is direction).
 
 If you expose the UI beyond LAN, put it behind reverse-proxy auth (Basic/SSO). The app itself has no multi-user login.
 

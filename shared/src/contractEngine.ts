@@ -11,6 +11,7 @@ import {
   getFieldRaw,
   getFieldValue,
   scalePlugTenthWatts,
+  extractPortsAndLimits,
   type MappedDeviceStatus,
   type MappedPlugTelemetry,
   type MappedQuota,
@@ -29,9 +30,23 @@ export const ContractFieldTargetSchema = z.enum([
   'plugWatts',
   'volt',
   'temp',
+  'runTime',
   'remainingCharge',
   'remainingDischarge',
   'chgDsgState',
+  'acIn',
+  'pv',
+  'pv2',
+  'dc12v',
+  'typec1',
+  'typec2',
+  'typec3',
+  'qcusb1',
+  'qcusb2',
+  'maxChargeSoc',
+  'minDischargeSoc',
+  'backupReserveSoc',
+  'energyBackupEn',
 ]);
 
 export type ContractFieldTarget = z.infer<typeof ContractFieldTargetSchema>;
@@ -49,6 +64,8 @@ export const DeviceContractCapabilitiesSchema = z.object({
   battery: z.boolean().optional(),
   plug: z.boolean().optional(),
   remainingTime: z.boolean().optional(),
+  ports: z.boolean().optional(),
+  limits: z.boolean().optional(),
 });
 
 export const DeviceContractSchema = z.object({
@@ -251,6 +268,15 @@ function mapPlugWithContract(
         plug.temp = raw;
         matched.temp = field.path;
       }
+      continue;
+    }
+
+    if (field.target === 'runTime' && plug.runTimeSec === undefined) {
+      const raw = findFirstRaw(sources, field.path);
+      if (raw !== undefined && raw >= 0) {
+        plug.runTimeSec = Math.round(raw);
+        matched.runTime = field.path;
+      }
     }
   }
 
@@ -366,6 +392,13 @@ function mapStationWithContract(
     }
   }
 
+  // Ports / limits: always extract from known Delta 3 keys when present
+  // (list paths + scalars). Contract scalar targets remain for documentation.
+  const { ports, limits } =
+    contract.capabilities.ports === false && contract.capabilities.limits === false
+      ? {}
+      : extractPortsAndLimits(sources, matched);
+
   return {
     batteryLevel,
     chargeRate,
@@ -373,6 +406,8 @@ function mapStationWithContract(
     status,
     ...(remainingChargeMin !== undefined ? { remainingChargeMin } : {}),
     ...(remainingDischargeMin !== undefined ? { remainingDischargeMin } : {}),
+    ...(ports ? { ports } : {}),
+    ...(limits ? { limits } : {}),
     matched,
   };
 }

@@ -637,5 +637,57 @@ describe('MQTTService', () => {
       expect(cached!.status.plugWatts).toBe(150);
     });
   });
+
+  describe('getLastRawQuota', () => {
+    type HandleMessageFn = (topic: string, message: Buffer) => void;
+
+    const invokeHandleMessage = (topic: string, payload: unknown) => {
+      const handleMessage = (mqttService as unknown as { handleMessage: HandleMessageFn })
+        .handleMessage;
+      handleMessage.call(mqttService, topic, Buffer.from(JSON.stringify(payload)));
+    };
+
+    it('stores last raw quota payload before mapping', () => {
+      const sn = 'D3M1ZE1A9H998313';
+      const account = 'test-account';
+      const payload = { params: { cmsBattSoc: 88, powInSumW: 100 } };
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, payload);
+
+      const raw = mqttService.getLastRawQuota(sn);
+      expect(raw).toBeDefined();
+      expect(raw!.topic).toBe(`/open/${account}/${sn}/quota`);
+      expect(raw!.payload).toEqual(payload);
+      expect(raw!.merged.cmsBattSoc).toBe(88);
+      expect(raw!.merged.powInSumW).toBe(100);
+      expect(raw!.messageCount).toBe(1);
+      expect(raw!.timestamp).toBeGreaterThan(0);
+    });
+
+    it('merges successive partial heartbeats for Lab', () => {
+      const sn = 'D3M1MERGE01';
+      const account = 'test-account';
+
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        params: { cmsBattSoc: 88 },
+      });
+      invokeHandleMessage(`/open/${account}/${sn}/quota`, {
+        powInSumW: 246,
+        powOutSumW: 241,
+      });
+
+      const raw = mqttService.getLastRawQuota(sn);
+      expect(raw!.messageCount).toBe(2);
+      expect(raw!.merged.cmsBattSoc).toBe(88);
+      expect(raw!.merged.powInSumW).toBe(246);
+      expect(raw!.merged.powOutSumW).toBe(241);
+      // Last message stays partial
+      expect(raw!.payload).toEqual({ powInSumW: 246, powOutSumW: 241 });
+    });
+
+    it('returns undefined when no quota seen', () => {
+      expect(mqttService.getLastRawQuota('UNKNOWN_SN')).toBeUndefined();
+    });
+  });
 });
 

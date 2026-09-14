@@ -46,6 +46,20 @@ export class MQTTService extends EventEmitter {
   private reconnectDelay = RECONNECT_CONFIG.MQTT.DELAY;
   private subscribedDevices = new Set<string>();
   private statusCache = new Map<string, DeviceStatusUpdate>();
+  /**
+   * Lab inspector: last MQTT quota/get_reply + deep-merged field accumulation.
+   * Ecoflow publishes partial heartbeats; `merged` unions keys seen since process start.
+   */
+  private lastRawQuota = new Map<
+    string,
+    {
+      timestamp: number;
+      topic: string;
+      payload: unknown;
+      merged: Record<string, unknown>;
+      messageCount: number;
+    }
+  >();
   private fallbackToRest = false;
   private mqttCertification: EcoflowMQTTCertification | null = null;
   private certificationExpiry: number = 0; // Timestamp when certification expires (24 hours)
@@ -330,6 +344,71 @@ export class MQTTService extends EventEmitter {
   }
 
   /**
+   * Deep-merge plain objects for Lab accumulation. Arrays are replaced (latest wins).
+   */
+  private deepMergeQuota(
+    target: Record<string, unknown>,
+    source: Record<string, unknown>
+  ): Record<string, unknown> {
+    const out: Record<string, unknown> = { ...target };
+    for (const [key, value] of Object.entries(source)) {
+      if (value === undefined) continue;
+      const prev = out[key];
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        prev &&
+        typeof prev === 'object' &&
+        !Array.isArray(prev)
+      ) {
+        out[key] = this.deepMergeQuota(
+          prev as Record<string, unknown>,
+          value as Record<string, unknown>
+        );
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Pull the richest object to merge: prefer nested params/param/data when present.
+   */
+  private extractQuotaMergeFragment(data: unknown): Record<string, unknown> {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return {};
+    }
+    const obj = data as Record<string, unknown>;
+    const nestedKeys = ['params', 'param', 'data'] as const;
+    let fragment: Record<string, unknown> = { ...obj };
+    for (const key of nestedKeys) {
+      const nested = obj[key];
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        fragment = this.deepMergeQuota(
+          fragment,
+          nested as Record<string, unknown>
+        );
+      }
+    }
+    return fragment;
+  }
+
+  private recordRawQuotaMessage(deviceSn: string, topic: string, data: unknown): void {
+    const previous = this.lastRawQuota.get(deviceSn);
+    const fragment = this.extractQuotaMergeFragment(data);
+    const merged = this.deepMergeQuota(previous?.merged ?? {}, fragment);
+    this.lastRawQuota.set(deviceSn, {
+      timestamp: Date.now(),
+      topic,
+      payload: data,
+      merged,
+      messageCount: (previous?.messageCount ?? 0) + 1,
+    });
+  }
+
+  /**
    * Handle incoming MQTT messages
    */
   private handleMessage(topic: string, message: Buffer): void {
@@ -380,6 +459,11 @@ export class MQTTService extends EventEmitter {
       if (topicKind === 'status') {
         this.handlePresenceMessage(deviceSn, data, topic, start);
         return;
+      }
+
+      // Lab: keep last raw + accumulate fields (MQTT heartbeats are partial)
+      if (topicKind === 'quota' || topicKind === 'get_reply') {
+        this.recordRawQuotaMessage(deviceSn, topic, data);
       }
 
       // Smart Plug also publishes schedule (2_2), time/meta, wifiRssi-only on /quota —
@@ -974,6 +1058,19 @@ export class MQTTService extends EventEmitter {
     return this.statusCache.get(sn);
   }
 
+  /** Last raw MQTT quota/get_reply + merged accumulation for Lab inspector. */
+  getLastRawQuota(sn: string):
+    | {
+        timestamp: number;
+        topic: string;
+        payload: unknown;
+        merged: Record<string, unknown>;
+        messageCount: number;
+      }
+    | undefined {
+    return this.lastRawQuota.get(sn);
+  }
+
   /** Serial numbers currently marked for MQTT subscription. */
   getSubscribedDevices(): string[] {
     return Array.from(this.subscribedDevices);
@@ -1015,6 +1112,7 @@ export class MQTTService extends EventEmitter {
     this.isConnected = false;
     this.subscribedDevices.clear();
     this.statusCache.clear();
+    this.lastRawQuota.clear();
   }
 }
 

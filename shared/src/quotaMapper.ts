@@ -5,6 +5,7 @@
  */
 
 import { PLUG_POWER_CONFIG } from './constants';
+import type { DeviceLimitsTelemetry, DevicePortsTelemetry } from './types/ecoflow';
 
 export type MappedDeviceStatus = 'charging' | 'discharging' | 'standby';
 
@@ -18,6 +19,8 @@ export interface MappedPlugTelemetry {
   wattsAnomalous?: boolean;
   volt?: number;
   temp?: number;
+  /** Vendor runTime in seconds; omit when unknown */
+  runTimeSec?: number;
 }
 
 export interface MappedQuota {
@@ -27,6 +30,10 @@ export interface MappedQuota {
   status: MappedDeviceStatus;
   remainingChargeMin?: number;
   remainingDischargeMin?: number;
+  /** Delta 3 port power (whole W) */
+  ports?: DevicePortsTelemetry;
+  /** Delta 3 charge / backup limits */
+  limits?: DeviceLimitsTelemetry;
   /** Present when quota looks like a Smart Plug heartbeat */
   plug?: MappedPlugTelemetry;
   /** Which source keys won (for debugging / tests) */
@@ -38,8 +45,23 @@ export interface MappedQuota {
     plugWatts?: string;
     volt?: string;
     temp?: string;
+    runTime?: string;
     remainingCharge?: string;
     remainingDischarge?: string;
+    acIn?: string;
+    acOut?: string;
+    pv?: string;
+    pv2?: string;
+    dc12v?: string;
+    typec1?: string;
+    typec2?: string;
+    typec3?: string;
+    qcusb1?: string;
+    qcusb2?: string;
+    maxChargeSoc?: string;
+    minDischargeSoc?: string;
+    backupReserveSoc?: string;
+    energyBackupEn?: string;
   };
 }
 
@@ -136,6 +158,7 @@ export const PLUG_WATT_FIELDS: readonly WattFieldSpec[] = [
 
 export const PLUG_VOLT_KEYS: readonly string[] = ['2_1.volt', 'volt'] as const;
 export const PLUG_TEMP_KEYS: readonly string[] = ['2_1.temp', 'temp'] as const;
+export const PLUG_RUNTIME_KEYS: readonly string[] = ['2_1.runTime', 'runTime'] as const;
 
 /** Delta 3 remaining charge/discharge time (minutes) */
 export const REMAINING_CHARGE_KEYS: readonly string[] = [
@@ -147,6 +170,194 @@ export const REMAINING_DISCHARGE_KEYS: readonly string[] = [
   'cmsDsgRemTime',
   'cms_dsg_rem_time',
 ] as const;
+
+/** Delta 3 port / limit scalars (whole W or SOC %). */
+export const PORT_AC_IN_KEYS = ['powGetAcIn'] as const;
+export const PORT_PV_KEYS = ['powGetPv'] as const;
+export const PORT_PV2_KEYS = ['powGetPv2'] as const;
+export const PORT_12V_KEYS = ['powGet12v'] as const;
+export const PORT_TYPEC1_KEYS = ['powGetTypec1'] as const;
+export const PORT_TYPEC2_KEYS = ['powGetTypec2'] as const;
+export const PORT_TYPEC3_KEYS = ['powGetTypec3'] as const;
+export const PORT_QCUSB1_KEYS = ['powGetQcusb1'] as const;
+export const PORT_QCUSB2_KEYS = ['powGetQcusb2'] as const;
+export const LIMIT_MAX_CHG_KEYS = ['cmsMaxChgSoc'] as const;
+export const LIMIT_MIN_DSG_KEYS = ['cmsMinDsgSoc'] as const;
+export const LIMIT_BACKUP_SOC_KEYS = ['backupReverseSoc'] as const;
+export const LIMIT_BACKUP_EN_KEYS = ['energyBackupEn'] as const;
+export const AC_OUT_LIST_PATH = 'powGetAcOutList.powGetAcOutItem';
+export const DC12V_LIST_PATH = 'powGet12vList.powGet12vItem';
+
+function findFirstNumberArray(
+  sources: Record<string, unknown>[],
+  key: string
+): number[] | undefined {
+  for (const source of sources) {
+    const value = getFieldValue(source, key, true);
+    if (Array.isArray(value)) {
+      const nums = value
+        .map((v) => toNumber(v))
+        .filter((n): n is number => n !== undefined);
+      if (nums.length > 0) return nums;
+    }
+  }
+  return undefined;
+}
+
+function toBoolFlag(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true' || lower === '1' || lower === 'on') return true;
+    if (lower === 'false' || lower === '0' || lower === 'off') return false;
+  }
+  return undefined;
+}
+
+/**
+ * Extract Delta 3 port watts + charge limits from quota/MQTT sources.
+ * Shared by hardcoded mapper and contract engine.
+ */
+export function extractPortsAndLimits(
+  sources: Record<string, unknown>[],
+  matched: MappedQuota['matched']
+): { ports?: DevicePortsTelemetry; limits?: DeviceLimitsTelemetry } {
+  const ports: DevicePortsTelemetry = {};
+
+  for (const key of PORT_AC_IN_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.acInW = round1(raw);
+      matched.acIn = key;
+      break;
+    }
+  }
+
+  const acOutItems = findFirstNumberArray(sources, AC_OUT_LIST_PATH);
+  if (acOutItems) {
+    const lines = acOutItems.map((n) => round1(Math.abs(n)));
+    ports.acOutLinesW = lines;
+    ports.acOutW = round1(lines.reduce((a, b) => a + b, 0));
+    matched.acOut = AC_OUT_LIST_PATH;
+  }
+
+  for (const key of PORT_PV_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.pvW = round1(raw);
+      matched.pv = key;
+      break;
+    }
+  }
+  for (const key of PORT_PV2_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.pv2W = round1(raw);
+      matched.pv2 = key;
+      break;
+    }
+  }
+
+  for (const key of PORT_12V_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.dc12vW = round1(raw);
+      matched.dc12v = key;
+      break;
+    }
+  }
+  if (ports.dc12vW === undefined) {
+    const items12 = findFirstNumberArray(sources, DC12V_LIST_PATH);
+    if (items12) {
+      ports.dc12vW = round1(items12.reduce((a, b) => a + Math.abs(b), 0));
+      matched.dc12v = DC12V_LIST_PATH;
+    }
+  }
+
+  for (const key of PORT_TYPEC1_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.typec1W = round1(raw);
+      matched.typec1 = key;
+      break;
+    }
+  }
+  for (const key of PORT_TYPEC2_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.typec2W = round1(raw);
+      matched.typec2 = key;
+      break;
+    }
+  }
+  for (const key of PORT_TYPEC3_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.typec3W = round1(raw);
+      matched.typec3 = key;
+      break;
+    }
+  }
+  for (const key of PORT_QCUSB1_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.qcusb1W = round1(raw);
+      matched.qcusb1 = key;
+      break;
+    }
+  }
+  for (const key of PORT_QCUSB2_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      ports.qcusb2W = round1(raw);
+      matched.qcusb2 = key;
+      break;
+    }
+  }
+
+  const limits: DeviceLimitsTelemetry = {};
+  for (const key of LIMIT_MAX_CHG_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      limits.maxChargeSoc = clampSoc(raw);
+      matched.maxChargeSoc = key;
+      break;
+    }
+  }
+  for (const key of LIMIT_MIN_DSG_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      limits.minDischargeSoc = clampSoc(raw);
+      matched.minDischargeSoc = key;
+      break;
+    }
+  }
+  for (const key of LIMIT_BACKUP_SOC_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined) {
+      limits.backupReserveSoc = clampSoc(raw);
+      matched.backupReserveSoc = key;
+      break;
+    }
+  }
+  for (const key of LIMIT_BACKUP_EN_KEYS) {
+    const raw = findFirstValue(sources, key);
+    const flag = toBoolFlag(raw);
+    if (flag !== undefined) {
+      limits.energyBackupEnabled = flag;
+      matched.energyBackupEn = key;
+      break;
+    }
+  }
+
+  const hasPorts = Object.keys(ports).length > 0;
+  const hasLimits = Object.keys(limits).length > 0;
+  return {
+    ...(hasPorts ? { ports } : {}),
+    ...(hasLimits ? { limits } : {}),
+  };
+}
 
 export interface MapQuotaOptions {
   /**
@@ -437,12 +648,23 @@ function mapPlugTelemetry(
     }
   }
 
+  let runTimeSec: number | undefined;
+  for (const key of PLUG_RUNTIME_KEYS) {
+    const raw = findFirst(sources, key);
+    if (raw !== undefined && raw >= 0) {
+      runTimeSec = Math.round(raw);
+      matched.runTime = key;
+      break;
+    }
+  }
+
   return {
     ...(switchSta !== undefined ? { switchSta } : {}),
     ...(watts !== undefined ? { watts } : {}),
     ...(wattsAnomalous ? { wattsAnomalous: true } : {}),
     ...(volt !== undefined ? { volt } : {}),
     ...(temp !== undefined ? { temp } : {}),
+    ...(runTimeSec !== undefined ? { runTimeSec } : {}),
   };
 }
 
@@ -636,6 +858,8 @@ export function mapQuotaDataHardcoded(
     }
   }
 
+  const { ports, limits } = extractPortsAndLimits(sources, matched);
+
   return {
     batteryLevel,
     chargeRate,
@@ -643,6 +867,8 @@ export function mapQuotaDataHardcoded(
     status,
     ...(remainingChargeMin !== undefined ? { remainingChargeMin } : {}),
     ...(remainingDischargeMin !== undefined ? { remainingDischargeMin } : {}),
+    ...(ports ? { ports } : {}),
+    ...(limits ? { limits } : {}),
     matched,
   };
 }
@@ -662,8 +888,11 @@ export function toDeviceStatusFields(mapped: MappedQuota): {
   plugWattsAnomalous?: boolean;
   volt?: number;
   temp?: number;
+  runTimeSec?: number;
   remainingChargeMin?: number;
   remainingDischargeMin?: number;
+  ports?: DevicePortsTelemetry;
+  limits?: DeviceLimitsTelemetry;
 } {
   if (mapped.plug) {
     return {
@@ -677,6 +906,7 @@ export function toDeviceStatusFields(mapped: MappedQuota): {
       ...(mapped.plug.wattsAnomalous ? { plugWattsAnomalous: true } : {}),
       ...(mapped.plug.volt !== undefined ? { volt: mapped.plug.volt } : {}),
       ...(mapped.plug.temp !== undefined ? { temp: mapped.plug.temp } : {}),
+      ...(mapped.plug.runTimeSec !== undefined ? { runTimeSec: mapped.plug.runTimeSec } : {}),
     };
   }
 
@@ -691,5 +921,7 @@ export function toDeviceStatusFields(mapped: MappedQuota): {
     ...(mapped.remainingDischargeMin !== undefined
       ? { remainingDischargeMin: mapped.remainingDischargeMin }
       : {}),
+    ...(mapped.ports ? { ports: mapped.ports } : {}),
+    ...(mapped.limits ? { limits: mapped.limits } : {}),
   };
 }

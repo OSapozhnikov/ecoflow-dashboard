@@ -11,4 +11,7 @@ Tracked defaults:
 - `delta3-plus.json` (SN `P351…`)
 - `smart-plug.json` (SN `HW52…`)
 
+AC out / 12V **lists** (`powGetAcOutList.powGetAcOutItem`, `powGet12vList.powGet12vItem`)
+are handled in code (`extractPortsAndLimits`), not as single contract field paths.
+
 Do not put secrets here. Runtime SQLite / settings live in the parent `data/` folder.
