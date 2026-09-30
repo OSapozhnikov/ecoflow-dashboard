@@ -41,4 +41,9 @@ describe('resolveSourceDisplay', () => {
     expect(resolveSourceDisplay('rest', Date.now())).toBe('rest');
     expect(sourceDisplayLabel('rest')).toBe('REST');
   });
+
+  it('labels paused', () => {
+    expect(resolveSourceDisplay('paused', Date.now())).toBe('paused');
+    expect(sourceDisplayLabel('paused')).toBe('Paused');
+  });
 });

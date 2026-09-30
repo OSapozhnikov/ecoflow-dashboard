@@ -56,6 +56,16 @@ vi.mock('../utils/logger', () => ({
   },
 }));
 
+vi.mock('../dataFiles', () => ({
+  isDeviceDisabled: vi.fn(() => false),
+  readSettings: vi.fn(() => ({
+    telegram: { botToken: '', chatId: '' },
+    thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+    retention: { rawDays: 30, aggregateMonths: 13 },
+    disabledDeviceIds: [],
+  })),
+}));
+
 // Mock constants
 vi.mock('@ecoflow/shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@ecoflow/shared')>();
@@ -193,6 +203,17 @@ describe('MQTTService', () => {
       // we need to verify the actual behavior
       // The test verifies that with enabled config (default), device IS added
       expect(status.subscribedDevices.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should not subscribe when device is paused', async () => {
+      const { isDeviceDisabled } = await import('../dataFiles');
+      vi.mocked(isDeviceDisabled).mockReturnValue(true);
+      mqttService.disconnect();
+      mqttService.subscribeToDevice('HW52PAUSED');
+      expect(mqttService.getConnectionStatus().subscribedDevices).not.toContain(
+        'HW52PAUSED'
+      );
+      vi.mocked(isDeviceDisabled).mockReturnValue(false);
     });
   });
 

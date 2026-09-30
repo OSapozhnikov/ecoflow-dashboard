@@ -4,7 +4,7 @@
 
 import { useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deviceFamilyLabel,
   isSmartPlugFamily,
@@ -34,6 +34,7 @@ interface DiagnosticsPayload {
   productName?: string;
   deviceType?: string;
   family?: string;
+  monitoringEnabled?: boolean;
   mqtt: {
     enabled: boolean;
     connected: boolean;
@@ -49,12 +50,63 @@ interface DiagnosticsPayload {
   };
 }
 
+interface SettingsSummary {
+  disabledDeviceIds?: string[];
+}
+
 export function DeviceDetail() {
   const { deviceId } = useParams<{ deviceId: string }>();
   const [searchParams] = useSearchParams();
   const labRaw = searchParams.get('lab') === 'raw';
   const queryClient = useQueryClient();
-  const { data, isLoading, error, isError } = useDeviceStatus(deviceId || '', !!deviceId);
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<SettingsSummary>('/api/settings'),
+  });
+
+  const isPaused = Boolean(
+    deviceId && (settings?.disabledDeviceIds ?? []).includes(deviceId)
+  );
+
+  const { data, isLoading, error, isError } = useDeviceStatus(
+    deviceId || '',
+    !!deviceId && !isPaused
+  );
+
+  const monitoringMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put<{ deviceId: string; enabled: boolean }>(
+        `/api/devices/${deviceId}/monitoring`,
+        { enabled }
+      ),
+    onMutate: async (enabled) => {
+      if (!deviceId) return;
+      await queryClient.cancelQueries({ queryKey: ['settings'] });
+      const previous = queryClient.getQueryData<SettingsSummary>(['settings']);
+      const currentIds = previous?.disabledDeviceIds ?? [];
+      const nextIds = enabled
+        ? currentIds.filter((id) => id !== deviceId)
+        : currentIds.includes(deviceId)
+          ? currentIds
+          : [...currentIds, deviceId];
+      queryClient.setQueryData<SettingsSummary>(['settings'], {
+        ...previous,
+        disabledDeviceIds: nextIds,
+      });
+      return { previous };
+    },
+    onError: (_err, _enabled, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(['settings'], ctx.previous);
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
+      void queryClient.invalidateQueries({ queryKey: ['diagnostics', deviceId] });
+      void queryClient.invalidateQueries({ queryKey: ['device-status', deviceId] });
+    },
+  });
 
   const { data: diagnostics } = useQuery({
     queryKey: ['diagnostics', deviceId],
@@ -99,9 +151,10 @@ export function DeviceDetail() {
   }, [family, data]);
 
   const statusUnavailable =
-    isError ||
-    data?.source === 'error' ||
-    (!isLoading && (!data || !data.data));
+    !isPaused &&
+    (isError ||
+      data?.source === 'error' ||
+      (!isLoading && (!data || !data.data)));
 
   const detailErrorMessage = useMemo(() => {
     const fallback = isPlug
@@ -143,7 +196,10 @@ export function DeviceDetail() {
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
               {deviceName}
             </h1>
-            <SourceBadge source={data?.source} timestamp={data?.timestamp} />
+            <SourceBadge
+              source={isPaused ? 'paused' : data?.source}
+              timestamp={data?.timestamp}
+            />
           </div>
           {deviceId && (
             <p className="text-sm font-mono text-gray-500 dark:text-gray-400 mt-1">
@@ -153,9 +209,32 @@ export function DeviceDetail() {
           {modelLabel && (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{modelLabel}</p>
           )}
-          <div className="mb-6" />
+          <div className="mt-4 mb-6">
+            <button
+              type="button"
+              className={`px-3 py-1.5 rounded text-sm font-medium ${
+                isPaused
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'border border-gray-300 dark:border-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
+              disabled={!deviceId || monitoringMutation.isPending}
+              onClick={() => monitoringMutation.mutate(isPaused)}
+            >
+              {isPaused ? 'Resume monitoring' : 'Pause monitoring'}
+            </button>
+          </div>
 
-          {isLoading && <LoadingSpinner />}
+          {isPaused && (
+            <div
+              className="mb-6 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+              role="status"
+            >
+              Monitoring paused — no MQTT, REST, history, or alerts for this device. It is
+              hidden from the dashboard until resumed.
+            </div>
+          )}
+
+          {isLoading && !isPaused && <LoadingSpinner />}
 
           {statusUnavailable && !isLoading && (
             <div className="mb-6">
@@ -174,7 +253,7 @@ export function DeviceDetail() {
             </div>
           )}
 
-          {!isLoading && data?.data && data.source !== 'error' && isPlug && (
+          {!isPaused && !isLoading && data?.data && data.source !== 'error' && isPlug && (
             <div className="space-y-6">
               <div>
                 {!/smart\s*plug/i.test(modelLabel) && (
@@ -239,7 +318,7 @@ export function DeviceDetail() {
             </div>
           )}
 
-          {!isLoading && data?.data && data.source !== 'error' && !isPlug && (
+          {!isPaused && !isLoading && data?.data && data.source !== 'error' && !isPlug && (
             <div className="space-y-6">
               <div>
                 <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-4">
@@ -291,6 +370,9 @@ export function DeviceDetail() {
                     <div>In device list: {String(diagnostics.inDeviceList)}</div>
                     <div>Online (list): {String(diagnostics.online ?? '—')}</div>
                     <div>Family: {diagnostics.family ?? '—'}</div>
+                    <div>
+                      Monitoring: {String(diagnostics.monitoringEnabled ?? !isPaused)}
+                    </div>
                     <div>MQTT enabled: {String(diagnostics.mqtt.enabled)}</div>
                     <div>MQTT connected: {String(diagnostics.mqtt.connected)}</div>
                     <div>MQTT subscribed: {String(diagnostics.mqtt.subscribed)}</div>

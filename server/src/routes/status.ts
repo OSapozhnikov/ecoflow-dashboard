@@ -14,6 +14,7 @@ import { ecoflowService } from '../services/ecoflow';
 import { restStatusCache } from '../services/restStatusCache';
 import { evaluateStatus } from '../services/alertService';
 import { recordSample } from '../services/historyService';
+import { isDeviceDisabled } from '../services/dataFiles';
 import { apiRequestDuration, apiRequestTotal, deviceStatusUpdatesTotal } from '../utils/metrics';
 
 const router = Router();
@@ -64,6 +65,24 @@ router.get('/:deviceId/status', async (req: Request<{ deviceId: string }>, res: 
         error: {
           message: 'Device ID is required',
           code: 'MISSING_DEVICE_ID',
+        },
+      });
+      return;
+    }
+
+    if (isDeviceDisabled(deviceId)) {
+      const duration = (Date.now() - start) / 1000;
+      apiRequestDuration.observe({ endpoint, status_code: '200' }, duration);
+      apiRequestTotal.inc({ endpoint, status_code: '200' });
+      res.json({
+        deviceId,
+        source: 'paused',
+        timestamp: Date.now(),
+        data: {
+          deviceId,
+          batteryLevel: 0,
+          status: 'standby',
+          timestamp: Date.now(),
         },
       });
       return;

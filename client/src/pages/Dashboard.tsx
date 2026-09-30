@@ -22,6 +22,10 @@ interface ConnectionStatus {
   subscribedDevices: string[];
 }
 
+interface SettingsSummary {
+  disabledDeviceIds?: string[];
+}
+
 export function Dashboard() {
   const { data, isLoading, error } = useDevices();
   const [locationId, setLocationId] = useState<string>('all');
@@ -29,6 +33,11 @@ export function Dashboard() {
   const { data: locationsData } = useQuery({
     queryKey: ['locations'],
     queryFn: () => api.get<LocationsFile>('/api/locations'),
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<SettingsSummary>('/api/settings'),
   });
 
   const { data: connection } = useQuery({
@@ -39,22 +48,36 @@ export function Dashboard() {
 
   const devices = data?.devices || [];
   const locations = locationsData?.locations ?? [];
+  const disabledSet = useMemo(
+    () => new Set(settings?.disabledDeviceIds ?? []),
+    [settings]
+  );
+
+  const monitoredDevices = useMemo(
+    () => devices.filter((d) => !disabledSet.has(d.sn)),
+    [devices, disabledSet]
+  );
 
   const filtered = useMemo(() => {
-    if (locationId === 'all') return devices;
+    if (locationId === 'all') return monitoredDevices;
     const loc = locations.find((l) => l.id === locationId);
-    if (!loc) return devices;
+    if (!loc) return monitoredDevices;
     const set = new Set(loc.deviceIds);
-    return devices.filter((d) => set.has(d.sn));
-  }, [devices, locations, locationId]);
+    return monitoredDevices.filter((d) => set.has(d.sn));
+  }, [monitoredDevices, locations, locationId]);
 
   const health = useMemo(() => {
-    const total = devices.length;
-    const online = devices.filter((d) =>
+    const total = monitoredDevices.length;
+    const online = monitoredDevices.filter((d) =>
       typeof d.online === 'number' ? d.online === 1 : Boolean(d.online)
     ).length;
-    return { total, online, mqtt: connection?.usingMQTT ?? false };
-  }, [devices, connection]);
+    return {
+      total,
+      online,
+      mqtt: connection?.usingMQTT ?? false,
+      paused: disabledSet.size,
+    };
+  }, [monitoredDevices, connection, disabledSet]);
 
   if (isLoading) {
     return (
@@ -95,6 +118,7 @@ export function Dashboard() {
   }
 
   const hasDevices = Array.isArray(devices) && devices.length > 0;
+  const allPaused = hasDevices && monitoredDevices.length === 0;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-8">
@@ -102,6 +126,11 @@ export function Dashboard() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-gray-600 dark:text-gray-300">
             Fleet: {health.online}/{health.total} online
+            {health.paused > 0 && (
+              <span className="ml-2 text-amber-700 dark:text-amber-300">
+                · {health.paused} paused
+              </span>
+            )}
             {connection && (
               <span className="ml-3">
                 · {health.mqtt ? 'MQTT connected' : 'REST / MQTT down'}
@@ -140,7 +169,11 @@ export function Dashboard() {
         </div>
 
         {hasDevices ? (
-          filtered.length > 0 ? (
+          allPaused ? (
+            <p className="text-center text-gray-500 dark:text-gray-400 py-12">
+              All devices are paused. Resume them under Settings.
+            </p>
+          ) : filtered.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filtered.map((device) => (
                 <DeviceCard key={device.sn} device={device} />

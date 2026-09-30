@@ -7,12 +7,37 @@ import request from 'supertest';
 import express from 'express';
 import devicesRouter from '../devices';
 import { ecoflowService } from '../../services/ecoflow';
+import { mqttService } from '../../services/mqtt';
+import { readSettings, writeSettings } from '../../services/dataFiles';
 
 // Mock services
 vi.mock('../../services/ecoflow', () => ({
   ecoflowService: {
     getDevices: vi.fn(),
   },
+}));
+
+vi.mock('../../services/mqtt', () => ({
+  mqttService: {
+    subscribeToDevice: vi.fn(),
+    unsubscribeFromDevice: vi.fn(),
+    clearCachedStatus: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/dataFiles', () => ({
+  readSettings: vi.fn(() => ({
+    telegram: { botToken: '', chatId: '' },
+    thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+    retention: { rawDays: 30, aggregateMonths: 13 },
+    disabledDeviceIds: [],
+  })),
+  writeSettings: vi.fn((partial) => ({
+    telegram: { botToken: '', chatId: '' },
+    thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+    retention: { rawDays: 30, aggregateMonths: 13 },
+    disabledDeviceIds: partial.disabledDeviceIds ?? [],
+  })),
 }));
 
 // Mock logger
@@ -43,6 +68,12 @@ describe('Devices Routes', () => {
     app.use(express.json());
     app.use('/api/devices', devicesRouter);
     vi.clearAllMocks();
+    vi.mocked(readSettings).mockReturnValue({
+      telegram: { botToken: '', chatId: '' },
+      thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+      retention: { rawDays: 30, aggregateMonths: 13 },
+      disabledDeviceIds: [],
+    });
   });
 
   afterEach(() => {
@@ -63,39 +94,29 @@ describe('Devices Routes', () => {
         total: 1,
       };
 
-      vi.mocked(ecoflowService.getDevices).mockResolvedValue(mockDevices);
+      vi.mocked(ecoflowService.getDevices).mockResolvedValue(mockDevices as never);
 
-      const response = await request(app)
-        .get('/api/devices')
-        .expect(200);
+      const response = await request(app).get('/api/devices').expect(200);
 
-      expect(response.body).toEqual(mockDevices);
-      expect(ecoflowService.getDevices).toHaveBeenCalledTimes(1);
+      expect(response.body.devices).toHaveLength(1);
+      expect(response.body.devices[0].sn).toBe('ABC123');
     });
 
     it('should handle empty devices list', async () => {
-      const mockDevices = {
+      vi.mocked(ecoflowService.getDevices).mockResolvedValue({
         devices: [],
         total: 0,
-      };
+      } as never);
 
-      vi.mocked(ecoflowService.getDevices).mockResolvedValue(mockDevices);
-
-      const response = await request(app)
-        .get('/api/devices')
-        .expect(200);
+      const response = await request(app).get('/api/devices').expect(200);
 
       expect(response.body.devices).toEqual([]);
-      expect(response.body.total).toBe(0);
     });
 
-    it('should handle service errors', async () => {
-      const error = new Error('Failed to fetch devices');
-      vi.mocked(ecoflowService.getDevices).mockRejectedValue(error);
+    it('should handle errors', async () => {
+      vi.mocked(ecoflowService.getDevices).mockRejectedValue(new Error('Failed to fetch devices'));
 
-      const response = await request(app)
-        .get('/api/devices')
-        .expect(500);
+      const response = await request(app).get('/api/devices').expect(500);
 
       expect(response.body.error).toBeDefined();
       expect(response.body.error.message).toBe('Failed to fetch devices');
@@ -107,13 +128,53 @@ describe('Devices Routes', () => {
       const error = new EcoflowAPIError('API Error', 'ERROR_CODE', 500);
       vi.mocked(ecoflowService.getDevices).mockRejectedValue(error);
 
-      const response = await request(app)
-        .get('/api/devices')
-        .expect(500);
+      const response = await request(app).get('/api/devices').expect(500);
 
       expect(response.body.error).toBeDefined();
       expect(response.body.error.message).toBe('API Error');
     });
   });
-});
 
+  describe('PUT /api/devices/:deviceId/monitoring', () => {
+    it('pauses monitoring and unsubscribes MQTT', async () => {
+      const response = await request(app)
+        .put('/api/devices/HW52X/monitoring')
+        .send({ enabled: false })
+        .expect(200);
+
+      expect(response.body).toEqual({ deviceId: 'HW52X', enabled: false });
+      expect(writeSettings).toHaveBeenCalledWith({
+        disabledDeviceIds: ['HW52X'],
+      });
+      expect(mqttService.unsubscribeFromDevice).toHaveBeenCalledWith('HW52X');
+      expect(mqttService.clearCachedStatus).toHaveBeenCalledWith('HW52X');
+    });
+
+    it('resumes monitoring and subscribes MQTT', async () => {
+      vi.mocked(readSettings).mockReturnValue({
+        telegram: { botToken: '', chatId: '' },
+        thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+        retention: { rawDays: 30, aggregateMonths: 13 },
+        disabledDeviceIds: ['HW52X'],
+      });
+
+      const response = await request(app)
+        .put('/api/devices/HW52X/monitoring')
+        .send({ enabled: true })
+        .expect(200);
+
+      expect(response.body.enabled).toBe(true);
+      expect(writeSettings).toHaveBeenCalledWith({ disabledDeviceIds: [] });
+      expect(mqttService.subscribeToDevice).toHaveBeenCalledWith('HW52X');
+    });
+
+    it('rejects missing enabled boolean', async () => {
+      const response = await request(app)
+        .put('/api/devices/HW52X/monitoring')
+        .send({})
+        .expect(400);
+
+      expect(response.body.error.code).toBe('INVALID_BODY');
+    });
+  });
+});

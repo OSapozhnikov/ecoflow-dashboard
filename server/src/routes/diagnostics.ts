@@ -7,6 +7,7 @@ import { resolveDeviceFamily } from '@ecoflow/shared';
 import { getConfig } from '../config/env';
 import { ecoflowService } from '../services/ecoflow';
 import { mqttService } from '../services/mqtt';
+import { isDeviceDisabled } from '../services/dataFiles';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -26,6 +27,7 @@ router.get(
     const conn = mqttService.getConnectionStatus();
     const cached = mqttService.getCachedStatus(deviceId);
     const lastErr = ecoflowService.getLastDeviceError(deviceId);
+    const monitoringEnabled = !isDeviceDisabled(deviceId);
 
     let inDeviceList = false;
     let online: boolean | undefined;
@@ -62,6 +64,7 @@ router.get(
       productName,
       deviceType,
       family,
+      monitoringEnabled,
       mqtt: {
         enabled: Boolean(config.ecoflow.mqtt?.enabled),
         connected: conn.connected,
@@ -70,7 +73,7 @@ router.get(
         hasCachedStatus: Boolean(cached),
       },
       status: {
-        source: cached?.source,
+        source: monitoringEnabled ? cached?.source : 'paused',
         timestamp: cached?.timestamp,
         lastRestCode: lastErr?.code ?? null,
         lastError: lastErr?.message ?? null,

@@ -16,7 +16,7 @@ import {
   upsertMonthlyAgg,
   type HistorySampleRow,
 } from './historyDb';
-import { readSettings } from './dataFiles';
+import { readSettings, isDeviceDisabled } from './dataFiles';
 import { mqttService, type DeviceStatusUpdate } from './mqtt';
 import { logger } from '../utils/logger';
 
@@ -41,6 +41,10 @@ function monthKey(ts: number): string {
 }
 
 export function recordSample(input: RecordSampleInput): void {
+  if (isDeviceDisabled(input.deviceId)) {
+    return;
+  }
+
   const ts = input.ts ?? Date.now();
   const s = input.status;
   const isPlug = Boolean(s.isPlug);

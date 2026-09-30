@@ -11,7 +11,7 @@ export type DeviceStatus = 'charging' | 'discharging' | 'standby';
 /**
  * Data source enum
  */
-export type DataSource = 'mqtt' | 'rest' | 'error';
+export type DataSource = 'mqtt' | 'rest' | 'error' | 'paused';
 
 /**
  * Base device interface

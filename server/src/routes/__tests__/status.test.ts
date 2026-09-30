@@ -26,6 +26,16 @@ vi.mock('../../services/ecoflow', () => ({
   },
 }));
 
+vi.mock('../../services/dataFiles', () => ({
+  isDeviceDisabled: vi.fn(() => false),
+  readSettings: vi.fn(() => ({
+    telegram: { botToken: '', chatId: '' },
+    thresholds: { lowSocPercent: 20, offlineAfterMinutes: 15, plugWattsAnomalyMax: 4000 },
+    retention: { rawDays: 30, aggregateMonths: 13 },
+    disabledDeviceIds: [],
+  })),
+}));
+
 // Mock logger
 vi.mock('../../utils/logger', () => ({
   logger: {
@@ -314,6 +324,22 @@ describe('Status Routes', () => {
         .expect(200);
 
       expect(mqttService.subscribeToDevice).toHaveBeenCalledWith('ABC123');
+    });
+
+    it('returns paused without REST when device is disabled', async () => {
+      const { isDeviceDisabled } = await import('../../services/dataFiles');
+      vi.mocked(isDeviceDisabled).mockReturnValue(true);
+
+      const response = await request(app)
+        .get('/api/devices/HW52PAUSED/status')
+        .expect(200);
+
+      expect(response.body.source).toBe('paused');
+      expect(mqttService.getDeviceStatus).not.toHaveBeenCalled();
+      expect(ecoflowService.getDeviceStatus).not.toHaveBeenCalled();
+      expect(mqttService.subscribeToDevice).not.toHaveBeenCalled();
+
+      vi.mocked(isDeviceDisabled).mockReturnValue(false);
     });
   });
 

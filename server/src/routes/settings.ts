@@ -52,6 +52,9 @@ router.put('/', (req: Request, res: Response) => {
       },
       thresholds: body.thresholds,
       retention: body.retention,
+      disabledDeviceIds: Array.isArray(body.disabledDeviceIds)
+        ? body.disabledDeviceIds.filter((id: unknown) => typeof id === 'string')
+        : undefined,
     });
     // Validate shape
     SettingsSchema.parse(next);

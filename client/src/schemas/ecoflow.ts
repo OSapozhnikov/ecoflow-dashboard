@@ -86,7 +86,7 @@ export const DeviceStatusSchema = z.object({
 export const DeviceStatusResponseSchema = z.object({
   deviceId: z.string(),
   data: DeviceStatusSchema,
-  source: z.enum(['mqtt', 'rest', 'error']).optional(),
+  source: z.enum(['mqtt', 'rest', 'error', 'paused']).optional(),
   timestamp: z.number().optional(),
 });
 

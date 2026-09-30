@@ -3,7 +3,7 @@
  */
 
 import type { EcoflowDeviceStatus } from '../types/ecoflow';
-import { readSettings } from './dataFiles';
+import { readSettings, isDeviceDisabled } from './dataFiles';
 import { logger } from '../utils/logger';
 
 const DEFAULT_COOLDOWN_MS = 45 * 60 * 1000;
@@ -88,6 +88,10 @@ export function evaluateStatus(
   status: EcoflowDeviceStatus | null | undefined,
   online?: boolean
 ): void {
+  if (isDeviceDisabled(deviceId)) {
+    return;
+  }
+
   const settings = readSettings();
   const { lowSocPercent, offlineAfterMinutes, plugWattsAnomalyMax } =
     settings.thresholds;

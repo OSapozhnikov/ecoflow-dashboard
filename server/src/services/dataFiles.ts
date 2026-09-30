@@ -40,9 +40,16 @@ export const SettingsSchema = z.object({
       rawDays: HISTORY_CONFIG.RAW_RETENTION_DAYS,
       aggregateMonths: HISTORY_CONFIG.AGGREGATE_RETENTION_MONTHS,
     }),
+  /** Serial numbers excluded from MQTT/REST monitoring, history, and alerts */
+  disabledDeviceIds: z.array(z.string()).default([]),
 });
 
 export type AppSettings = z.infer<typeof SettingsSchema>;
+
+export function isDeviceDisabled(deviceSn: string): boolean {
+  if (!deviceSn) return false;
+  return readSettings().disabledDeviceIds.includes(deviceSn);
+}
 
 export const LocationsSchema = z.object({
   locations: z
@@ -102,6 +109,10 @@ export function writeSettings(partial: Partial<AppSettings>): AppSettings {
     telegram: { ...current.telegram, ...partial.telegram },
     thresholds: { ...current.thresholds, ...partial.thresholds },
     retention: { ...current.retention, ...partial.retention },
+    disabledDeviceIds:
+      partial.disabledDeviceIds !== undefined
+        ? partial.disabledDeviceIds
+        : current.disabledDeviceIds,
   });
   writeJsonFile(settingsPath(), merged);
   return merged;

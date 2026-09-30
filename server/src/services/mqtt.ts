@@ -26,6 +26,7 @@ import {
 } from '../utils/metrics';
 import { recordSampleFromUpdate } from './historyService';
 import { evaluateStatus } from './alertService';
+import { isDeviceDisabled } from './dataFiles';
 
 export interface DeviceStatusUpdate {
   deviceSn: string;
@@ -199,6 +200,10 @@ export class MQTTService extends EventEmitter {
           if (devices.length > 0) {
             logger.info(`📡 Subscribing to ${devices.length} device(s)...`);
             devices.forEach((device) => {
+              if (isDeviceDisabled(device.sn)) {
+                logger.info(`⏸️  Skipping paused device ${device.sn}`);
+                return;
+              }
               this.subscribeToDevice(device.sn);
             });
           } else {
@@ -287,6 +292,11 @@ export class MQTTService extends EventEmitter {
       return;
     }
 
+    if (isDeviceDisabled(deviceSn)) {
+      logger.debug(`⏸️  Not subscribing to paused device ${deviceSn}`);
+      return;
+    }
+
     this.subscribedDevices.add(deviceSn);
 
     if (!this.isConnected || !this.client) {
@@ -341,6 +351,13 @@ export class MQTTService extends EventEmitter {
     topics.forEach((topic) => {
       this.client!.unsubscribe(topic);
     });
+  }
+
+  /** Drop cached status for a device (e.g. after pause). */
+  clearCachedStatus(deviceSn: string): void {
+    if (this.statusCache.delete(deviceSn)) {
+      deviceStatusCacheSize.set(this.statusCache.size);
+    }
   }
 
   /**
@@ -452,6 +469,11 @@ export class MQTTService extends EventEmitter {
       if (!deviceSn) {
         logger.warn('⚠️  Could not extract device SN from topic:', { topic });
         mqttMessagesTotal.inc({ topic, status: 'missing_device_sn' });
+        return;
+      }
+
+      if (isDeviceDisabled(deviceSn)) {
+        mqttMessagesTotal.inc({ topic, status: 'skipped_paused' });
         return;
       }
 

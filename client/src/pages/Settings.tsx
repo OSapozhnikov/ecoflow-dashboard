@@ -15,6 +15,7 @@ interface AppSettings {
     plugWattsAnomalyMax: number;
   };
   retention: { rawDays: number; aggregateMonths: number };
+  disabledDeviceIds: string[];
 }
 
 interface LocationsFile {
@@ -34,6 +35,7 @@ const emptySettings: AppSettings = {
     plugWattsAnomalyMax: 4000,
   },
   retention: { rawDays: 30, aggregateMonths: 13 },
+  disabledDeviceIds: [],
 };
 
 export function Settings() {
@@ -51,6 +53,9 @@ export function Settings() {
         },
         thresholds: raw.thresholds ?? emptySettings.thresholds,
         retention: raw.retention ?? emptySettings.retention,
+        disabledDeviceIds: Array.isArray(raw.disabledDeviceIds)
+          ? raw.disabledDeviceIds
+          : [],
       } satisfies AppSettings;
     },
   });
@@ -67,10 +72,6 @@ export function Settings() {
   const [locName, setLocName] = useState('');
   const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (settings) setForm(settings);
-  }, [settings]);
-
   const saveSettings = useMutation({
     mutationFn: (body: AppSettings) =>
       api.put<{ ok: boolean; settings: AppSettings }>('/api/settings', body),
@@ -86,6 +87,57 @@ export function Settings() {
     onSuccess: () => setMessage('Telegram test message sent'),
     onError: (e: Error) => setMessage(e.message),
   });
+
+  const setMonitoring = useMutation({
+    mutationFn: ({ sn, enabled }: { sn: string; enabled: boolean }) =>
+      api.put<{ deviceId: string; enabled: boolean }>(
+        `/api/devices/${sn}/monitoring`,
+        { enabled }
+      ),
+    onMutate: async ({ sn, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['settings'] });
+      const previousForm = form;
+      const previousSettings = queryClient.getQueryData<AppSettings>(['settings']);
+      const nextIds = enabled
+        ? previousForm.disabledDeviceIds.filter((id) => id !== sn)
+        : previousForm.disabledDeviceIds.includes(sn)
+          ? previousForm.disabledDeviceIds
+          : [...previousForm.disabledDeviceIds, sn];
+
+      setForm((f) => ({ ...f, disabledDeviceIds: nextIds }));
+      queryClient.setQueryData<AppSettings>(['settings'], (old) =>
+        old
+          ? { ...old, disabledDeviceIds: nextIds }
+          : { ...emptySettings, disabledDeviceIds: nextIds }
+      );
+
+      return { previousForm, previousSettings };
+    },
+    onError: (e: Error, _vars, ctx) => {
+      if (ctx?.previousForm) setForm(ctx.previousForm);
+      if (ctx?.previousSettings) {
+        queryClient.setQueryData(['settings'], ctx.previousSettings);
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ['settings'] });
+      }
+      setMessage(e.message || 'Failed to update monitoring');
+    },
+    onSuccess: (res) => {
+      setMessage(
+        res.enabled
+          ? `Monitoring resumed for ${res.deviceId}`
+          : `Monitoring paused for ${res.deviceId}`
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+
+  useEffect(() => {
+    // Don't clobber optimistic checkbox state while a monitoring toggle is in flight
+    if (settings && !setMonitoring.isPending) setForm(settings);
+  }, [settings, setMonitoring.isPending]);
 
   const saveLocations = useMutation({
     mutationFn: (body: LocationsFile) => api.put<LocationsFile>('/api/locations', body),
@@ -271,6 +323,54 @@ export function Settings() {
               Send test Telegram
             </button>
           </div>
+        </section>
+
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 space-y-4">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+            Device monitoring
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Uncheck to pause a device (no MQTT/REST/history/alerts). Paused devices are
+            hidden from the dashboard.
+          </p>
+          {devices.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No devices loaded.</p>
+          ) : (
+            <div className="space-y-2">
+              {devices.map((d) => {
+                const monitored = !(form.disabledDeviceIds ?? []).includes(d.sn);
+                const rowPending =
+                  setMonitoring.isPending &&
+                  setMonitoring.variables?.sn === d.sn;
+                return (
+                  <label
+                    key={d.sn}
+                    className="flex items-center gap-3 text-sm text-gray-800 dark:text-gray-200"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={monitored}
+                      disabled={rowPending}
+                      onChange={() =>
+                        setMonitoring.mutate({ sn: d.sn, enabled: !monitored })
+                      }
+                    />
+                    <span>
+                      {d.deviceName || d.sn}
+                      <span className="ml-2 font-mono text-xs text-gray-500">
+                        {d.sn}
+                      </span>
+                      {!monitored && (
+                        <span className="ml-2 text-amber-700 dark:text-amber-300 text-xs">
+                          paused
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 space-y-4">
