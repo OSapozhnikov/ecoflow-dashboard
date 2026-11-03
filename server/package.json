@@ -34,7 +34,7 @@
     "swagger-ui-express": "^5.0.1",
     "winston": "^3.19.0",
     "ws": "^8.21.3",
-    "zod": "^4.3.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
